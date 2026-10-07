@@ -121,8 +121,12 @@ describe("the MCP tool surface", () => {
 	it("is exactly the in-app agent's tools, with its descriptions", async () => {
 		const mcp = await connect(new FakeEditor());
 		const { tools } = await mcp.listTools();
-		expect(tools.map((t) => t.name)).toEqual([...OPENSCREEN_TOOL_NAMES]);
-		for (const tool of tools) {
+		expect(tools.map((t) => t.name)).toEqual([
+			...OPENSCREEN_TOOL_NAMES,
+			"createCheckpoint",
+			"restoreCheckpoint",
+		]);
+		for (const tool of tools.slice(0, OPENSCREEN_TOOL_NAMES.length)) {
 			expect(tool.description).toBe(TOOL_DESCRIPTIONS[tool.name]);
 			expect(tool.inputSchema.type).toBe("object");
 		}
@@ -140,6 +144,8 @@ describe("the MCP tool surface", () => {
 		expect(byName.get("getCurrentDocument")?.readOnlyHint).toBe(true);
 		expect(byName.get("addTrim")?.readOnlyHint).toBe(false);
 		expect(byName.get("removeClip")?.destructiveHint).toBe(true);
+		expect(byName.get("createCheckpoint")?.readOnlyHint).toBe(true);
+		expect(byName.get("restoreCheckpoint")?.destructiveHint).toBe(true);
 	});
 
 	it("hands the client the in-app agent's guidance as server instructions", async () => {
@@ -209,6 +215,69 @@ describe("calling a tool", () => {
 		const result = await mcp.callTool({ name: "getCurrentDocument", arguments: {} });
 		expect(result.isError).toBe(true);
 		expect(resultText(result)).toContain("No project is open");
+	});
+});
+
+describe("checkpoints", () => {
+	async function checkpoint(mcp: Client): Promise<string> {
+		const result = await mcp.callTool({ name: "createCheckpoint", arguments: {} });
+		expect(result.isError).toBeFalsy();
+		return JSON.parse(resultText(result)).checkpointId;
+	}
+
+	function addTrim(mcp: Client, startSec: number) {
+		return mcp.callTool({
+			name: "addTrim",
+			arguments: { assetId: "asset_1", startSec, endSec: startSec + 1 },
+		});
+	}
+
+	it("reverts several edits in one apply", async () => {
+		const editor = new FakeEditor();
+		const before = structuredClone(editor.document);
+		const mcp = await connect(editor);
+		const checkpointId = await checkpoint(mcp);
+		expect(editor.applied).toHaveLength(0);
+		await addTrim(mcp, 5);
+		await addTrim(mcp, 10);
+		expect(editor.document?.timeline.trimRanges).toHaveLength(2);
+
+		const result = await mcp.callTool({ name: "restoreCheckpoint", arguments: { checkpointId } });
+		expect(result.isError).toBeFalsy();
+		expect(editor.applied).toHaveLength(3);
+		expect(editor.document).toEqual(before);
+	});
+
+	it("refuses to restore when the user has turned project edits off", async () => {
+		const editor = new FakeEditor();
+		const mcp = await connect(editor, { editsAllowed: false });
+		const checkpointId = await checkpoint(mcp);
+		const result = await mcp.callTool({ name: "restoreCheckpoint", arguments: { checkpointId } });
+		expect(result.isError).toBe(true);
+		expect(editor.applied).toHaveLength(0);
+	});
+
+	it("refuses an unknown checkpoint", async () => {
+		const editor = new FakeEditor();
+		const mcp = await connect(editor);
+		const result = await mcp.callTool({
+			name: "restoreCheckpoint",
+			arguments: { checkpointId: "cp_nope" },
+		});
+		expect(result.isError).toBe(true);
+		expect(editor.applied).toHaveLength(0);
+	});
+
+	it("never restores one project's checkpoint over another project", async () => {
+		const editor = new FakeEditor();
+		const mcp = await connect(editor);
+		const checkpointId = await checkpoint(mcp);
+		const other = fixtureDocument();
+		editor.document = { ...other, project: { ...other.project, id: "proj_2" } };
+		const result = await mcp.callTool({ name: "restoreCheckpoint", arguments: { checkpointId } });
+		expect(result.isError).toBe(true);
+		expect(resultText(result)).toContain("another project");
+		expect(editor.applied).toHaveLength(0);
 	});
 });
 

@@ -11,16 +11,22 @@
 // the same revision-guarded apply, so a user edit landing mid-call is never
 // overwritten and every edit is one undo step.
 //
+// Two tools exist only here: `createCheckpoint` / `restoreCheckpoint`. A client
+// chains several edits per turn, and undo is per call, so they give it one step
+// back to where the turn started. The in-app agent has no need for them: its
+// whole turn is already a single apply.
+//
 // The HTTP layer is local-only: bound to 127.0.0.1, a bearer token on every
 // request, and a Host/Origin check so a web page cannot reach it by DNS
 // rebinding.
 
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import { type AxcutDocument, documentSchema } from "../../src/lib/ai-edition/schema";
 import { isMutatingTool } from "../ai-edition/agent-tools";
 import {
@@ -89,8 +95,30 @@ const DESTRUCTIVE_TOOLS: ReadonlySet<string> = new Set([
 
 const MCP_PREAMBLE = [
 	"These tools act on the project currently open in the OpenScreen editor. Every edit is saved straight away and appears in the editor, where the user can undo it with Ctrl/Cmd+Z. Nothing here records, exports or imports media.",
+	"Before a series of edits, call createCheckpoint. Undo is one step per call, so if the result is not what the user wanted, restoreCheckpoint takes the project back in one step instead of many.",
 	"",
 ].join("\n");
+
+// ponytail: kept in memory, last 20 only. Lost when OpenScreen quits or the MCP
+// server is turned off; persist them per project if agents need them across sessions.
+const MAX_CHECKPOINTS = 20;
+
+const CHECKPOINT_TOOLS = [
+	{
+		name: "createCheckpoint",
+		description:
+			"Save the current state of the open project and return its checkpointId. Changes nothing. Call it before a series of edits so restoreCheckpoint can revert all of them in one step.",
+		inputSchema: z.object({}),
+		mutating: false,
+	},
+	{
+		name: "restoreCheckpoint",
+		description:
+			"Put the open project back exactly as it was when createCheckpoint returned this checkpointId, discarding every edit made since, including the user's. Lands as one undo step, so the user can undo the restore itself.",
+		inputSchema: z.object({ checkpointId: z.string() }),
+		mutating: true,
+	},
+] as const;
 
 function textResult(text: string, isError: boolean): CallToolResult {
 	return { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) };
@@ -107,6 +135,48 @@ function errorMessage(error: unknown): string {
  */
 export function createToolRunner(deps: McpToolDeps) {
 	let queue: Promise<unknown> = Promise.resolve();
+	const checkpoints = new Map<string, AxcutDocument>();
+
+	function createCheckpoint(document: AxcutDocument): CallToolResult {
+		const checkpointId = `cp_${randomUUID()}`;
+		checkpoints.set(checkpointId, document);
+		// A Map iterates in insertion order: the first key is the oldest.
+		for (const oldest of checkpoints.keys()) {
+			if (checkpoints.size <= MAX_CHECKPOINTS) break;
+			checkpoints.delete(oldest);
+		}
+		return textResult(JSON.stringify({ checkpointId }), false);
+	}
+
+	async function restoreCheckpoint(
+		document: AxcutDocument,
+		revision: number,
+		args: unknown,
+	): Promise<CallToolResult> {
+		if (!deps.editsAllowed()) {
+			return textResult(
+				"Project edits are turned off in OpenScreen, so the checkpoint was NOT restored. Ask the user to re-enable 'Project edits' in Settings → AI, or to undo the edits themselves.",
+				true,
+			);
+		}
+		const id = (args as { checkpointId?: unknown } | null)?.checkpointId;
+		const checkpoint = typeof id === "string" ? checkpoints.get(id) : undefined;
+		if (!checkpoint) {
+			return textResult(
+				"Unknown checkpointId. Checkpoints last until OpenScreen quits, and only the 20 most recent are kept.",
+				true,
+			);
+		}
+		if (checkpoint.project.id !== document.project.id) {
+			return textResult(
+				"The edit was NOT applied: this checkpoint belongs to another project than the one open in the editor.",
+				true,
+			);
+		}
+		const applied = await deps.host.apply(checkpoint, revision);
+		if (applied !== "applied") return textResult(APPLY_FAILURE_MESSAGES[applied], true);
+		return textResult(JSON.stringify({ ok: true, restored: id }), false);
+	}
 
 	async function run(name: string, args: unknown): Promise<CallToolResult> {
 		const snapshot = await deps.host.snapshot();
@@ -116,6 +186,8 @@ export function createToolRunner(deps: McpToolDeps) {
 			return textResult("The project open in the editor could not be read.", true);
 		}
 		const document = parsed.data;
+		if (name === "createCheckpoint") return createCheckpoint(document);
+		if (name === "restoreCheckpoint") return restoreCheckpoint(document, snapshot.revision, args);
 		const availableByAssetId = await probeCursorTelemetry(document, deps.cursor);
 		const execution = await runDocumentTool(document, name, args, deps.editsAllowed(), {
 			cursor: deps.cursor,
@@ -160,6 +232,21 @@ export function createOpenScreenMcpServer(
 				},
 			},
 			(args: unknown) => runTool(name, args),
+		);
+	}
+	for (const tool of CHECKPOINT_TOOLS) {
+		server.registerTool(
+			tool.name,
+			{
+				description: tool.description,
+				inputSchema: tool.inputSchema,
+				annotations: {
+					readOnlyHint: !tool.mutating,
+					destructiveHint: tool.mutating,
+					openWorldHint: false,
+				},
+			},
+			(args: unknown) => runTool(tool.name, args),
 		);
 	}
 	return server;

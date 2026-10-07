@@ -15,7 +15,7 @@ OpenScreen can offer the in-app agent's tools to MCP clients the user runs thems
 
 Nothing about the tools is reimplemented. The server registers `TOOL_ARG_SCHEMAS` (names and zod schemas), `TOOL_DESCRIPTIONS`, and hands `buildSystemPrompt` to the client as the server `instructions` — all exported from [`deep-agent/service.ts`](../../electron/ai-edition/deep-agent/service.ts), where `buildTools` builds the in-app agent from the same table. Every call goes through `runDocumentTool`, the function the in-app agent's `documentTool` also calls: the cursor-telemetry read the zoom tools need, then `executeAgentTool`.
 
-So a tool added to the agent appears over MCP with no further work, and the MCP test asserts the listed tools equal `OPENSCREEN_TOOL_NAMES`. What the server adds is MCP metadata only: `readOnlyHint` for the reads (`!isMutatingTool`) and `destructiveHint` for `replaceTimeline` and the three `remove*` tools.
+So a tool added to the agent appears over MCP with no further work, and the MCP test asserts the listed tools equal `OPENSCREEN_TOOL_NAMES`, followed by the two checkpoint tools below, the only ones that exist over MCP alone. What the server adds is MCP metadata only: `readOnlyHint` for the reads (`!isMutatingTool`) and `destructiveHint` for `replaceTimeline` and the three `remove*` tools.
 
 **Writes are a second opt-in.** MCP clients have their own "Project edits" switch, `allowEdits` in `mcp-server.json`, **off by default** and independent of the in-app agent's `allowAgentEdits`. Turning the server on therefore grants read access only. The value is read on every call and passed to the executor as `editsAllowed`, the same gate the in-app agent's switch drives: while it is off every mutating tool is refused with the executor's consent message, and the consent block of the system prompt is in the instructions. It is independent because `allowAgentEdits` defaults to allowed and lives in the provider form, so a user with no provider configured could never have turned MCP writes off.
 
@@ -30,6 +30,14 @@ The in-app agent is handed a document snapshot per chat turn. An MCP client has 
 A user edit that lands between 1 and 3 moves the revision and the apply is refused as a conflict; the client is told to re-read. The renderer also compares the project id, because the revision counter restarts at 0 when a project closes and a quick switch to another project could otherwise match. Calls are serialised in the main process so two of them never interleave.
 
 Only the webContents that registered on `ai-edition.mcp-host` is asked, and only its replies count. An editor that unmounts or is destroyed stops being asked. A request unanswered for 30 s resolves to "no project" (reads) or `timeout` (writes, reported as "did not confirm", not as a failure, since the save may have landed).
+
+## Checkpoints
+
+A client chains several edits in one turn, and each is its own undo step, so reverting a turn by hand means one Ctrl+Z per call, interleaved with whatever the user did meanwhile. `createCheckpoint` saves the live document in the main process and returns a `checkpointId`; `restoreCheckpoint` applies that document back through the same revision-guarded apply, so the whole revert is **one undo step** the user can itself undo. The server instructions tell the client to checkpoint before a series of edits.
+
+- A restore is a write: refused while MCP "Project edits" is off, and refused when the checkpoint's project id is not the open project's.
+- It discards every edit since the checkpoint, the user's included. The tool description says so.
+- Checkpoints live in memory, the 20 most recent. They are lost when the app quits or the server is turned off. The in-app agent does not need them: its whole turn is a single apply.
 
 ## Transport and security
 
