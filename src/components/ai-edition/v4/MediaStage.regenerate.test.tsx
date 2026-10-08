@@ -82,7 +82,7 @@ describe("MediaStage Regenerate button", () => {
 		act(() => regenerate.focus());
 		expect((await screen.findByRole("tooltip")).textContent).toBe("mediaStage.regenerateTip");
 		fireEvent.click(regenerate);
-		expect(transcription.request).toHaveBeenCalledWith("asset-1", "auto");
+		await vi.waitFor(() => expect(transcription.request).toHaveBeenCalledWith("asset-1", "auto"));
 	});
 
 	it("stays focusable and keeps its tooltip while a transcription runs, and fires nothing", async () => {

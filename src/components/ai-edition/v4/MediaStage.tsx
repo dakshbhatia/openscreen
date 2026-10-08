@@ -9,7 +9,7 @@ import type {
 	AxcutTranscript,
 	TranscriptLanguageCode,
 } from "@/lib/ai-edition/schema";
-import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { useProjectStore, waitForDocumentSaves } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
 	useTranscriptionStore,
@@ -429,7 +429,10 @@ export function MediaStage({
 									rows={2}
 									spellCheck={false}
 									onBlur={(e) => {
-										const next = document && withVocabulary(document, e.target.value);
+										// The latest document, not the render's: a save replaces the whole
+										// document, so a stale one would undo a transcript written meanwhile.
+										const latest = useProjectStore.getState().document;
+										const next = latest && withVocabulary(latest, e.target.value);
 										if (next) void saveDocument(next, { history: true });
 									}}
 									style={{
@@ -493,7 +496,12 @@ export function MediaStage({
 											onClick={
 												selectedBusy
 													? undefined
-													: () => void requestTranscription(selected.id, lang)
+													: async () => {
+															// Clicking here blurs the terms field, whose save is still in
+															// flight: the run must read the terms it just saved.
+															if ((await waitForDocumentSaves()) === "timeout") return;
+															void requestTranscription(selected.id, lang);
+														}
 											}
 											style={{
 												width: 36,
