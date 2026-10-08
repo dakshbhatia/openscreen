@@ -89,6 +89,9 @@ jobs:
           NEXT: ${{ steps.version.outputs.next }}
         run: |
           set -euo pipefail
+          # Taken from the dispatched ref before the release branch is checked out: a frozen
+          # branch cut before this script existed would not have it.
+          cp .github/scripts/refresh-nix-npm-hash.sh "$RUNNER_TEMP/"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # ONE release branch per STABLE version (release/vX.Y.Z), created at rc.1 and
@@ -117,7 +120,7 @@ jobs:
           # lockfile behind on every release up to 1.9.0; see the script header.
           node .github/scripts/set-release-version.mjs "${PRERELEASE}"
           # The lockfile's version is part of Nix's npm hash: refresh it in this same commit.
-          bash .github/scripts/refresh-nix-npm-hash.sh
+          bash "$RUNNER_TEMP/refresh-nix-npm-hash.sh"
           git add package.json package-lock.json nix/package.nix
           git commit -m "chore(release): bump to ${PRERELEASE} [skip ci]" || echo "(version already at ${PRERELEASE})"
           git push "$REMOTE" "$BRANCH"

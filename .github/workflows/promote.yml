@@ -72,6 +72,9 @@ jobs:
           STABLE_VERSION: ${{ steps.version.outputs.stable_version }}
         run: |
           set -euo pipefail
+          # Taken from the dispatched ref before the release branch is checked out: a frozen
+          # branch cut before this script existed would not have it.
+          cp .github/scripts/refresh-nix-npm-hash.sh "$RUNNER_TEMP/"
           # Promote checks out the FROZEN release branch (created by prerelease.yml) and
           # rewrites the version there. This guarantees the stable tag points at the
           # same code that was tested as the RC plus any cherry-picked bugfixes.
@@ -83,7 +86,7 @@ jobs:
           # lockfile behind on every release up to 1.9.0; see the script header.
           node .github/scripts/set-release-version.mjs "${STABLE_VERSION}"
           # The lockfile's version is part of Nix's npm hash: refresh it in this same commit.
-          bash .github/scripts/refresh-nix-npm-hash.sh
+          bash "$RUNNER_TEMP/refresh-nix-npm-hash.sh"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json package-lock.json nix/package.nix
