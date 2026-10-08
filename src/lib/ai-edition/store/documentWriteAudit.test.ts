@@ -119,6 +119,9 @@ const DECLARED: WritePath[] = [
 		"gesture",
 	),
 
+	// The project's names and terms for Whisper (#1023), saved when the field loses focus.
+	w("src/components/ai-edition/v4/MediaStage.tsx", "MediaStage", "save", "gesture"),
+
 	// The persist that follows an undo. Recording it would undo the undo.
 	w("src/components/ai-edition/NewEditorShell.tsx", "NewEditorShell", "save", "automatic"),
 	// "Save" on the unsaved-changes prompt.
