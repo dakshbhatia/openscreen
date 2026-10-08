@@ -12,6 +12,8 @@
 //   POST /inference    multipart/form-data, fields:
 //                       - file           (WAV: 16 kHz mono PCM16)
 //                       - language       ("en" | "fr" | ... | "auto")
+//                       - prompt         (optional: names and terms to bias the
+//                                         decode toward, issue #1023)
 //                       - response_format ("verbose_json" — accepted for compat
 //                                          with the previous CT2 client)
 //   GET  /             200 "ok" once the model is loaded — readiness probe.
@@ -452,6 +454,8 @@ int main(int argc, char** argv) {
 		else if (auto kv = req.params.find("language"); kv != req.params.end()) language = kv->second;
 		// "auto" → empty string tells whisper.cpp to detect; matches the
 		// Node contract (electron/stt/whisperServer.ts) and OpenAI convention.
+		// The project's names and terms (issue #1023). Empty = no prompt.
+		const std::string prompt = req.get_file_value("prompt").content;
 
 		const std::lock_guard<std::mutex> lk(infer_mu);
 
@@ -462,6 +466,13 @@ int main(int argc, char** argv) {
 		wparams.print_realtime   = false;
 		wparams.print_timestamps = false;
 		wparams.n_threads        = threads;
+		// Carried into every 30 s window whisper_full decodes, not only the first:
+		// a name said at minute 3 is as likely to be misheard as one said at 0:05.
+		// whisper.cpp keeps the last n_text_ctx/2 tokens of an over-long prompt.
+		if (!prompt.empty()) {
+			wparams.initial_prompt       = prompt.c_str();
+			wparams.carry_initial_prompt = true;
+		}
 
 		// ---- Speech only (Silero VAD), cut here rather than by whisper_full ----
 		// whisper_full's own `vad` param maps SEGMENT times back onto the upload
