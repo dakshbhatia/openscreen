@@ -140,6 +140,7 @@ import {
 	shouldEnumerateRecordingSources,
 	shouldPersistSelectedSource,
 } from "../recording-source-settings";
+import { getSourcesByType, shouldEnumerateSourceTypesSeparately } from "./desktopSourceTypes";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
 import { createNativeMacMidCaptureErrorWatch } from "./nativeMacMidCaptureErrorWatch";
 import { registerRecordingPrefsHandlers } from "./recordingPrefs";
@@ -1982,18 +1983,19 @@ export function registerIpcHandlers(
 		// await it, and a renderer-side race would only stop *waiting* while this
 		// keeps running and its reply goes to nobody. Rejecting is what turns an
 		// indefinite spinner into the pickers' existing error branch.
-		// How long it actually took, under the existing diagnostic flag. The bound
-		// above turned an indefinite hang into a named failure, which is where the
-		// open question starts rather than ends: on a headless runner `openscreen
-		// sources` gets an answer within 20s four times in five while `record` --
-		// the same call with the same options -- exceeds 30s every time. A duration
-		// on both paths is what tells those apart; a threshold alone cannot.
+		// How long it actually took, under the existing diagnostic flag. That
+		// duration is what showed the headless hang (#462) to be bimodal -- ~17ms
+		// or never -- and so not a threshold problem; see desktopSourceTypes.ts.
 		const startedAt = Date.now();
 		const diagnostic = isDiagnosticModeEnabled();
 		let sources: Awaited<ReturnType<typeof desktopCapturer.getSources>>;
 		try {
 			sources = await withDeadline(
-				desktopCapturer.getSources(opts),
+				getSourcesByType(
+					opts,
+					(typeOpts) => desktopCapturer.getSources(typeOpts),
+					shouldEnumerateSourceTypesSeparately(process.platform, process.env),
+				),
 				GET_SOURCES_TIMEOUT_MS,
 				`Desktop source enumeration did not return within ${GET_SOURCES_TIMEOUT_MS}ms. ` +
 					"This usually means the display or GPU stack cannot be reached — check that a display server is available.",

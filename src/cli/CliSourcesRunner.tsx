@@ -110,16 +110,11 @@ async function enumerateMicrophones(): Promise<{
 }
 
 async function enumerateSources(): Promise<CliSourcesResult> {
-	// desktopCapturer.getSources is unbounded on the main side, and on a host
-	// whose GL stack is broken -- a CI runner, a container, a server where ANGLE
-	// cannot initialise -- it can simply never return. `openscreen sources` hung
-	// forever on four of five headless attempts, always here: the milestones show
-	// the renderer asking for its request and then going silent, which is the call
-	// immediately after.
-	//
-	// Bounded on this side rather than in the shared get-sources handler, which
-	// the GUI uses too and where a timeout would change behaviour nobody asked to
-	// change. Failing in twenty seconds with a reason beats hanging until killed.
+	// desktopCapturer.getSources can simply never return: on X11, Electron 41 did
+	// so whenever screens and windows were enumerated in one call (#462; the
+	// get-sources handler now splits them, see desktopSourceTypes.ts). Bounded
+	// here as well, below the handler's own 30s, so this more specific message
+	// wins. Failing in twenty seconds with a reason beats hanging until killed.
 	const sources = await withTimeout<Awaited<
 		ReturnType<typeof window.electronAPI.getSources>
 	> | null>(
