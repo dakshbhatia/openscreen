@@ -35,13 +35,11 @@ flowchart TD
     subgraph T3["Tier 3 — stable package distribution"]
         Homebrew[update-homebrew-cask.yml]
         Winget[publish-winget.yml]
-        Nix[bump-nix-package.yml]
         AUR[aur-publish.yml]
     end
 
     Publish -->|stable release published| Homebrew
     Publish -->|stable release published| Winget
-    Publish -->|stable release published| Nix
     Publish -->|stable release published| AUR
 
     subgraph T4["Tier 4 — automation and diagnostics"]
@@ -68,7 +66,6 @@ The STT workflow uploads standalone archives for binary refresh and does not cur
 | 2.5 | `promote.yml` | Manual dispatch |
 | 3 | `update-homebrew-cask.yml` | Published release; manual dispatch |
 | 3 | `publish-winget.yml` | Published release; manual dispatch |
-| 3 | `bump-nix-package.yml` | Published release; manual dispatch |
 | 3 | `aur-publish.yml` | Published release; manual dispatch |
 | 4 | `discord-pr-notify.yml` | PR target, review, and issue-comment events |
 | 4 | `discord-roadmap-sync.yml` | Merged PR to `main`; push to `main` |
@@ -115,7 +112,7 @@ This matrix builds `whisper-stt-server` and its ggml backend sidecars for macOS 
 
 ## Tier 2.5: release management
 
-`prerelease.yml` and `promote.yml` orchestrate the frozen release branch, version tags, milestones, build dispatch, and Discord announcements. The full procedure, fallback, branch freeze, and credential requirements live in [release and secrets](release-and-secrets.md).
+`prerelease.yml` and `promote.yml` orchestrate the frozen release branch, version tags, milestones, build dispatch, and Discord announcements. Their version-bump commit also refreshes `npmDepsHash` in `nix/package.nix` (`.github/scripts/refresh-nix-npm-hash.sh`): the lockfile's root version is part of that hash, and the commit is `[skip ci]`, so refreshing it anywhere later left `nix build` red from every release until a separate bump PR landed. The full procedure, fallback, branch freeze, and credential requirements live in [release and secrets](release-and-secrets.md).
 
 At a high level, the RC workflow creates or reuses `release/vX.Y.Z`, tags its tip, and dispatches `build.yml` at that tag. Promotion creates the stable version and tag from the same release branch, syncs it back through a PR, and dispatches the stable build at the tag.
 
@@ -125,10 +122,9 @@ These workflows run for stable published releases and support manual replay with
 
 - `update-homebrew-cask.yml` waits for both macOS DMGs, hashes them, writes a cask, and pushes to the configured tap. Manual replay refuses any tag that is not a stable `vMAJOR.MINOR.PATCH`, because `workflow_dispatch` takes free text and the `prerelease` filter only covers the `release` event.
 - `publish-winget.yml` passes the matching NSIS release asset to `winget-releaser`, after a read-only step checks that the token can create komac's branch in the `winget-pkgs` fork (#757).
-- `bump-nix-package.yml` computes `npmDepsHash`, updates `nix/package.nix`, and opens a PR.
 - `aur-publish.yml` hashes the pacman release asset, updates `PKGBUILD` and `.SRCINFO`, and pushes over SSH.
 
-Each workflow needs variables or credentials, and where it checks for them decides whether a missing one is visible. `update-homebrew-cask.yml` and `publish-winget.yml` check inside a step that emits a warning, so an unconfigured channel says so in the run summary; a job-level `if:` would instead report `skipped`, which reads as green and hid #148 for eight releases and the Homebrew cask for its entire existence (#335). `bump-nix-package.yml` uses the repository `GITHUB_TOKEN`; the others require the external registry credentials described in [release and secrets](release-and-secrets.md).
+Each workflow needs variables or credentials, and where it checks for them decides whether a missing one is visible. `update-homebrew-cask.yml` and `publish-winget.yml` check inside a step that emits a warning, so an unconfigured channel says so in the run summary; a job-level `if:` would instead report `skipped`, which reads as green and hid #148 for eight releases and the Homebrew cask for its entire existence (#335). They require the external registry credentials described in [release and secrets](release-and-secrets.md).
 
 ## Tier 4: automation and diagnostics
 
@@ -140,6 +136,6 @@ Each workflow needs variables or credentials, and where it checks for them decid
 
 ## Artifact flow
 
-Release platform artifacts have 30-day Actions retention. `publish-release` copies the NSIS installer, two architecture-specific DMGs when present, and Linux packages into the GitHub release. It intentionally does not download the independently uploaded Store artifact. A stable published release then fans out to Homebrew, WinGet, Nix, and AUR.
+Release platform artifacts have 30-day Actions retention. `publish-release` copies the NSIS installer, two architecture-specific DMGs when present, and Linux packages into the GitHub release. It intentionally does not download the independently uploaded Store artifact. A stable published release then fans out to Homebrew, WinGet, and AUR.
 
 Diagnostic artifacts remain Actions-only for 14 days. Whisper archives remain Actions-only for 30 days and are used as a binary-refresh output rather than being downloaded by the release workflow. The website build artifact flows only into GitHub Pages deployment.

@@ -4,8 +4,8 @@ name: Nix
 # package-lock.json resolves to. The two have to agree or `nix build` fails
 # outright, and nothing here ever checked that they did.
 #
-# The only thing that refreshed the hash was bump-nix-package.yml, which fires
-# on stable releases. `src` is this repo's own tree, not a fetched tarball, so
+# The only thing that refreshed the hash used to be a bump PR opened after each
+# stable release (releases now refresh it in their own version-bump commit). `src` is this repo's own tree, not a fetched tarball, so
 # every lockfile change landing between two releases left main's hash pointing
 # at dependencies that no longer existed. It last matched on 2026-07-05 (v1.6.0)
 # while package-lock.json moved ten more times, so `nix run github:…` was broken

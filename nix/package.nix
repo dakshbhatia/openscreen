@@ -27,8 +27,9 @@ buildNpmPackage {
   pname = "openscreen";
   # Read, not restated. A hand-copied version is one more thing to remember at
   # release time and it had already drifted two minors behind the app it names.
-  # (`npmDepsHash` below still has to be updated by hand — that is Nix, not a
-  # choice — but it fails loudly, where a stale version number never does.)
+  # (`npmDepsHash` below still has to follow the lockfile — that is Nix, not a
+  # choice — but it fails loudly, where a stale version number never does.
+  # nix-check.yml prints it for a lockfile PR; releases refresh it themselves.)
   version = (lib.importJSON ../package.json).version;
 
   src =

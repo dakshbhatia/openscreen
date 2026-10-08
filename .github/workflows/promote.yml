@@ -59,6 +59,13 @@ jobs:
           STABLE_VERSION: ${{ steps.version.outputs.stable_version }}
         run: node .github/scripts/release-milestone-close.mjs
 
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
       - name: Bump the version to stable on the release branch
         env:
           TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
@@ -75,9 +82,11 @@ jobs:
           # Writes package-lock.json too. A sed over package.json alone left the
           # lockfile behind on every release up to 1.9.0; see the script header.
           node .github/scripts/set-release-version.mjs "${STABLE_VERSION}"
+          # The lockfile's version is part of Nix's npm hash: refresh it in this same commit.
+          bash .github/scripts/refresh-nix-npm-hash.sh
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
+          git add package.json package-lock.json nix/package.nix
           git commit --allow-empty -m "chore(release): bump to ${STABLE_VERSION} [skip ci]" || true
           git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
 
