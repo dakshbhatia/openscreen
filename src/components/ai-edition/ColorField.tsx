@@ -1,6 +1,7 @@
 import * as Popover from "@radix-ui/react-popover";
 import Colorful from "@uiw/react-color-colorful";
 import { useEffect, useState } from "react";
+import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { useScopedT } from "@/contexts/I18nContext";
 import styles from "./NewEditorShell.module.css";
 
@@ -168,26 +169,29 @@ export function ColorField({
 						aria-label={ts("annotation.colorPalette")}
 						style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 5 }}
 					>
-						{presets.map((preset) => (
-							<button
-								key={preset}
-								type="button"
-								title={preset}
-								aria-label={te("inspector.setColor", { color: preset })}
-								aria-pressed={value.toLowerCase() === preset.toLowerCase()}
-								onClick={() => pick(preset)}
-								style={{
-									height: 20,
-									borderRadius: 6,
-									background: preset,
-									border:
-										value.toLowerCase() === preset.toLowerCase()
-											? "2px solid var(--accent)"
-											: "1px solid var(--border-hi)",
-									cursor: "pointer",
-								}}
-							/>
-						))}
+						{/* Its own provider, like `Toggle`: the field is also drawn outside a pane. */}
+						<TooltipProvider>
+							{presets.map((preset) => (
+								<Tooltip key={preset} content={preset}>
+									<button
+										type="button"
+										aria-label={te("inspector.setColor", { color: preset })}
+										aria-pressed={value.toLowerCase() === preset.toLowerCase()}
+										onClick={() => pick(preset)}
+										style={{
+											height: 20,
+											borderRadius: 6,
+											background: preset,
+											border:
+												value.toLowerCase() === preset.toLowerCase()
+													? "2px solid var(--accent)"
+													: "1px solid var(--border-hi)",
+											cursor: "pointer",
+										}}
+									/>
+								</Tooltip>
+							))}
+						</TooltipProvider>
 					</div>
 				</Popover.Content>
 			</Popover.Portal>

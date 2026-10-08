@@ -3,7 +3,7 @@
 // pixel shapes: the Original row and Auto only exist, or only die, under those conditions.
 
 import "@testing-library/jest-dom";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
 import { LOCALE_STORAGE_KEY } from "@/i18n/config";
@@ -79,10 +79,20 @@ function frameSettings() {
 beforeEach(() => {
 	localStorage.clear();
 	useProjectStore.setState({ document: null });
+	// jsdom has none, and a Radix tooltip measures its trigger when it opens.
+	vi.stubGlobal(
+		"ResizeObserver",
+		class {
+			observe = () => undefined;
+			unobserve = () => undefined;
+			disconnect = () => undefined;
+		},
+	);
 });
 afterEach(() => {
 	cleanup();
 	localStorage.clear();
+	vi.unstubAllGlobals();
 });
 
 describe("the frame row persists the pick", () => {
@@ -179,9 +189,16 @@ describe("the format row", () => {
 				]),
 				locale,
 			);
-			const read = ["16:9 · 1920×1080", "9:16 · 1080×1920"].map((name) =>
-				screen.getByRole("button", { name }).getAttribute("title"),
-			);
+			// The shared tooltip, opened by a keyboard focus: the count is its accessible description.
+			const read = ["16:9 · 1920×1080", "9:16 · 1080×1920"].map((name) => {
+				const button = screen.getByRole("button", { name });
+				fireEvent.keyDown(window, { key: "Tab" });
+				act(() => button.focus());
+				const description = button.getAttribute("aria-describedby");
+				const text = description ? document.getElementById(description)?.textContent : null;
+				act(() => button.blur());
+				return text;
+			});
 			cleanup();
 			return read;
 		};

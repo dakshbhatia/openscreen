@@ -16,7 +16,8 @@ function renderOn(plate: string, onChange = vi.fn()) {
 	return onChange;
 }
 
-const swatch = (color: string) => screen.queryByTitle(color);
+// By its name: the hex is its tooltip, drawn only on hover.
+const swatch = (color: string) => screen.queryByRole("button", { name: `Set color ${color}` });
 
 describe("TextColorField", () => {
 	it("offers only the palette colours that read on a dark plate", () => {

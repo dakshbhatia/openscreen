@@ -11,6 +11,7 @@
 
 import { Captions as CaptionsIcon, Languages, Loader2, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { useScopedT } from "@/contexts/I18nContext";
 import type {
 	CaptionAnchorH,
@@ -245,17 +246,22 @@ export function CaptionsPane({ onClose }: { onClose?: () => void } = {}) {
 					<CaptionsIcon size={14} />
 				</span>
 				<h2>{t("facets.captions")}</h2>
+				{/* Its own provider, like `Toggle`: the pane renders without the app's root one in the
+				    tests. */}
 				{onClose ? (
-					<button
-						type="button"
-						className={styles.iconBtn}
-						style={{ marginLeft: "auto" }}
-						title={tc("actions.close")}
-						aria-label={tc("actions.close")}
-						onClick={onClose}
-					>
-						<X size={14} />
-					</button>
+					<TooltipProvider>
+						<Tooltip content={tc("actions.close")}>
+							<button
+								type="button"
+								className={styles.iconBtn}
+								style={{ marginLeft: "auto" }}
+								aria-label={tc("actions.close")}
+								onClick={onClose}
+							>
+								<X size={14} />
+							</button>
+						</Tooltip>
+					</TooltipProvider>
 				) : null}
 			</header>
 			<div

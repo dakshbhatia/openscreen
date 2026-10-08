@@ -1,3 +1,4 @@
+import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { useScopedT } from "@/contexts/I18nContext";
 import { paletteFor, readableText } from "@/lib/ai-edition/textContrast";
 import { ColorField } from "./ColorField";
@@ -25,43 +26,50 @@ export function TextColorField({
 }) {
 	const te = useScopedT("editor");
 	const palette = paletteFor(plate);
+	// Its own provider, like `Toggle`: the field is also drawn outside a pane.
 	return (
-		<div role="group" aria-label={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-			{palette.map((color) => {
-				const active = value.toLowerCase() === color;
-				return (
-					<button
-						key={color}
-						type="button"
-						title={color}
-						aria-label={te("inspector.setColor", { color })}
-						aria-pressed={active}
-						disabled={disabled}
-						onClick={() => {
-							onChange(color);
-							onCommit?.();
-						}}
-						style={{
-							width: 22,
-							height: 22,
-							padding: 0,
-							borderRadius: 999,
-							background: color,
-							border: active ? "2px solid var(--accent)" : "1px solid var(--border-hi)",
-							cursor: disabled ? "default" : "pointer",
-							opacity: disabled ? 0.5 : 1,
-						}}
-					/>
-				);
-			})}
-			<ColorField
-				label={label}
-				value={value}
-				disabled={disabled}
-				presets={palette}
-				onChange={(next) => onChange(readableText(next, plate))}
-				onCommit={onCommit}
-			/>
-		</div>
+		<TooltipProvider>
+			<div
+				role="group"
+				aria-label={label}
+				style={{ display: "flex", alignItems: "center", gap: 6 }}
+			>
+				{palette.map((color) => {
+					const active = value.toLowerCase() === color;
+					return (
+						<Tooltip key={color} content={color}>
+							<button
+								type="button"
+								aria-label={te("inspector.setColor", { color })}
+								aria-pressed={active}
+								disabled={disabled}
+								onClick={() => {
+									onChange(color);
+									onCommit?.();
+								}}
+								style={{
+									width: 22,
+									height: 22,
+									padding: 0,
+									borderRadius: 999,
+									background: color,
+									border: active ? "2px solid var(--accent)" : "1px solid var(--border-hi)",
+									cursor: disabled ? "default" : "pointer",
+									opacity: disabled ? 0.5 : 1,
+								}}
+							/>
+						</Tooltip>
+					);
+				})}
+				<ColorField
+					label={label}
+					value={value}
+					disabled={disabled}
+					presets={palette}
+					onChange={(next) => onChange(readableText(next, plate))}
+					onCommit={onCommit}
+				/>
+			</div>
+		</TooltipProvider>
 	);
 }

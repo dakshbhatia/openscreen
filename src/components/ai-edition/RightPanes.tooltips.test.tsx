@@ -6,7 +6,7 @@
 //   label, where a keyboard or screen-reader user cannot reach it (rule 10).
 
 import "@testing-library/jest-dom";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
 import { LOCALE_STORAGE_KEY } from "@/i18n/config";
@@ -143,6 +143,38 @@ describe("inspector switch tooltips", () => {
 		focusSwitch("Show cursor");
 
 		expect(visibleTooltip()).toBeNull();
+	});
+});
+
+// Issue #1016: the camera's preset and position icons, and the frame tiles, named themselves
+// through the browser's `title`, which looks and waits unlike every other tooltip here.
+describe("inspector icon choices", () => {
+	it.each([
+		["Preset", <LayoutPane key="l" />],
+		["Position", <LayoutPane key="p" />],
+		["Style", <VideoEffectsPane key="e" />],
+	])("%s: each icon names itself in the shared tooltip", (row, pane) => {
+		mount(pane);
+		const buttons = within(screen.getByRole("group", { name: row })).getAllByRole("button");
+		expect(buttons.length).toBeGreaterThan(1);
+
+		for (const button of buttons) {
+			const name = button.getAttribute("aria-label") ?? "";
+			expect(name).not.toBe("");
+			expect(button).not.toHaveAttribute("title");
+			act(() => button.focus());
+			expect(visibleTooltip()).toHaveTextContent(name);
+			expect(button).toHaveAccessibleDescription(name);
+			act(() => button.blur());
+		}
+	});
+
+	it("names the pane's help button in the shared tooltip", () => {
+		mount(<LayoutPane />);
+		const help = screen.getByRole("button", { name: "Help" });
+		expect(help).not.toHaveAttribute("title");
+		act(() => help.focus());
+		expect(help).toHaveAccessibleDescription("Help");
 	});
 });
 

@@ -174,70 +174,78 @@ function Pane({ title, icon, helpText, actions, onClose, children }: PaneProps) 
 	const tc = useScopedT("common");
 	const helpLabel = ts("panes.help");
 	const [helpOpen, setHelpOpen] = useState(false);
+	// Its own provider, like `Toggle`: a pane renders without the app's root one in the tests,
+	// and every icon-only control inside it has a tooltip.
 	return (
-		<div className={`${styles.pane} ${styles.isActive}`}>
-			<header
-				className={styles.paneHead}
-				style={{
-					position: "relative",
-					...(onClose ? { paddingRight: "var(--sp-4)" } : {}),
-				}}
-			>
-				{icon ? (
-					<span style={{ display: "inline-flex", alignItems: "center", color: "var(--muted)" }}>
-						{icon}
-					</span>
-				) : null}
-				<h2>{title}</h2>
-				<span style={{ marginLeft: "auto", display: "inline-flex", gap: 4, alignItems: "center" }}>
-					{actions}
-					<button
-						type="button"
-						className={styles.iconBtn}
-						title={helpLabel}
-						aria-label={helpLabel}
-						aria-expanded={helpOpen}
-						onClick={() => setHelpOpen((v) => !v)}
-					>
-						<HelpCircle size={16} />
-					</button>
-					{onClose ? (
-						<button
-							type="button"
-							className={styles.iconBtn}
-							title={tc("actions.close")}
-							aria-label={tc("actions.close")}
-							onClick={onClose}
-						>
-							<X size={16} />
-						</button>
+		<TooltipProvider>
+			<div className={`${styles.pane} ${styles.isActive}`}>
+				<header
+					className={styles.paneHead}
+					style={{
+						position: "relative",
+						...(onClose ? { paddingRight: "var(--sp-4)" } : {}),
+					}}
+				>
+					{icon ? (
+						<span style={{ display: "inline-flex", alignItems: "center", color: "var(--muted)" }}>
+							{icon}
+						</span>
 					) : null}
-				</span>
-				{helpOpen ? (
-					<div
-						role="note"
-						style={{
-							position: "absolute",
-							top: "calc(100% + 4px)",
-							right: 8,
-							zIndex: 60,
-							maxWidth: 240,
-							padding: "10px 12px",
-							background: "var(--surface)",
-							border: "1px solid var(--border)",
-							borderRadius: "var(--r-md)",
-							boxShadow: "var(--elev-pop)",
-							color: "var(--fg-2)",
-							font: "400 12px/1.5 var(--font-body)",
-						}}
-						onClick={() => setHelpOpen(false)}
+					<h2>{title}</h2>
+					<span
+						style={{ marginLeft: "auto", display: "inline-flex", gap: 4, alignItems: "center" }}
 					>
-						{helpText}
-					</div>
-				) : null}
-			</header>
-			<div className={styles.paneBody}>{children}</div>
-		</div>
+						{actions}
+						<Tooltip content={helpLabel}>
+							<button
+								type="button"
+								className={styles.iconBtn}
+								aria-label={helpLabel}
+								aria-expanded={helpOpen}
+								onClick={() => setHelpOpen((v) => !v)}
+							>
+								<HelpCircle size={16} />
+							</button>
+						</Tooltip>
+						{onClose ? (
+							<Tooltip content={tc("actions.close")}>
+								<button
+									type="button"
+									className={styles.iconBtn}
+									aria-label={tc("actions.close")}
+									onClick={onClose}
+								>
+									<X size={16} />
+								</button>
+							</Tooltip>
+						) : null}
+					</span>
+					{helpOpen ? (
+						<div
+							role="note"
+							style={{
+								position: "absolute",
+								top: "calc(100% + 4px)",
+								right: 8,
+								zIndex: 60,
+								maxWidth: 240,
+								padding: "10px 12px",
+								background: "var(--surface)",
+								border: "1px solid var(--border)",
+								borderRadius: "var(--r-md)",
+								boxShadow: "var(--elev-pop)",
+								color: "var(--fg-2)",
+								font: "400 12px/1.5 var(--font-body)",
+							}}
+							onClick={() => setHelpOpen(false)}
+						>
+							{helpText}
+						</div>
+					) : null}
+				</header>
+				<div className={styles.paneBody}>{children}</div>
+			</div>
+		</TooltipProvider>
 	);
 }
 
@@ -633,16 +641,17 @@ export function WallpaperPicker({
 			{tab === "image" ? (
 				<div className={styles.bgGrid}>
 					{/* First, so it is found without scrolling past the bundled set. */}
-					<button
-						type="button"
-						className={`${styles.bgThumb} ${styles.bgAdd}`}
-						aria-label={ts("background.uploadCustom")}
-						title={ts("background.uploadCustom")}
-						disabled={!hasDocument}
-						onClick={onPickFile}
-					>
-						<ImagePlus size={15} />
-					</button>
+					<Tooltip content={ts("background.uploadCustom")}>
+						<button
+							type="button"
+							className={`${styles.bgThumb} ${styles.bgAdd}`}
+							aria-label={ts("background.uploadCustom")}
+							disabled={!hasDocument}
+							onClick={onPickFile}
+						>
+							<ImagePlus size={15} />
+						</button>
+					</Tooltip>
 					{customUrls.map((url) => (
 						<button
 							type="button"
@@ -1967,42 +1976,43 @@ function WordChipButton({
 	children: ReactNode;
 }) {
 	return (
-		<button
-			type="button"
-			contentEditable={false}
-			title={label}
-			aria-label={label}
-			onClick={(e) => {
-				e.stopPropagation();
-				onPress();
-			}}
-			style={{
-				position: "absolute",
-				left: "100%",
-				top: "50%",
-				transform: "translateY(-50%)",
-				display: "flex",
-				padding: "0 0 0 4px",
-				border: 0,
-				background: "transparent",
-				cursor: "pointer",
-			}}
-		>
-			<span
+		<Tooltip content={label}>
+			<button
+				type="button"
+				contentEditable={false}
+				aria-label={label}
+				onClick={(e) => {
+					e.stopPropagation();
+					onPress();
+				}}
 				style={{
-					display: "inline-flex",
-					alignItems: "center",
-					justifyContent: "center",
-					width: 18,
-					height: 18,
-					borderRadius: 4,
-					background: tone,
-					color: "white",
+					position: "absolute",
+					left: "100%",
+					top: "50%",
+					transform: "translateY(-50%)",
+					display: "flex",
+					padding: "0 0 0 4px",
+					border: 0,
+					background: "transparent",
+					cursor: "pointer",
 				}}
 			>
-				{children}
-			</span>
-		</button>
+				<span
+					style={{
+						display: "inline-flex",
+						alignItems: "center",
+						justifyContent: "center",
+						width: 18,
+						height: 18,
+						borderRadius: 4,
+						background: tone,
+						color: "white",
+					}}
+				>
+					{children}
+				</span>
+			</button>
+		</Tooltip>
 	);
 }
 
@@ -3756,23 +3766,23 @@ export function CursorPane() {
 						{cursorThemeOptions.map((option) => {
 							const isActive = settings.cursorTheme === option.id;
 							return (
-								<button
-									type="button"
-									key={option.id}
-									className={`${styles.cursorCell} ${isActive ? styles.isActive : ""}`}
-									title={option.name}
-									aria-label={option.name}
-									aria-pressed={isActive}
-									disabled={!hasDocument}
-									onClick={() => void set({ cursor: { theme: option.id } })}
-								>
-									<img
-										src={option.previewUrl}
-										alt=""
-										className={styles.cursorSprite}
-										draggable={false}
-									/>
-								</button>
+								<Tooltip key={option.id} content={option.name}>
+									<button
+										type="button"
+										className={`${styles.cursorCell} ${isActive ? styles.isActive : ""}`}
+										aria-label={option.name}
+										aria-pressed={isActive}
+										disabled={!hasDocument}
+										onClick={() => void set({ cursor: { theme: option.id } })}
+									>
+										<img
+											src={option.previewUrl}
+											alt=""
+											className={styles.cursorSprite}
+											draggable={false}
+										/>
+									</button>
+								</Tooltip>
 							);
 						})}
 					</div>
@@ -3828,31 +3838,34 @@ export function CursorPane() {
 									const shown = !settings.cursor.asArrow.includes(kind);
 									const label = cursorKindLabels[kind];
 									return (
-										<button
-											type="button"
+										<Tooltip
 											key={kind}
-											className={`${styles.cursorCell} ${shown ? styles.isActive : styles.cursorCellOff}`}
-											title={shown ? label : ts("cursor.typeAsArrow", { type: label })}
-											aria-label={label}
-											aria-pressed={shown}
-											disabled={!hasDocument}
-											onClick={() =>
-												void set({
-													cursor: {
-														asArrow: CURSOR_KIND_IDS.filter((k) =>
-															k === kind ? shown : settings.cursor.asArrow.includes(k),
-														),
-													},
-												})
-											}
+											content={shown ? label : ts("cursor.typeAsArrow", { type: label })}
 										>
-											<img
-												src={safeAssetUrl(cursorSprites[type].assetPath)}
-												alt=""
-												className={styles.cursorSprite}
-												draggable={false}
-											/>
-										</button>
+											<button
+												type="button"
+												className={`${styles.cursorCell} ${shown ? styles.isActive : styles.cursorCellOff}`}
+												aria-label={label}
+												aria-pressed={shown}
+												disabled={!hasDocument}
+												onClick={() =>
+													void set({
+														cursor: {
+															asArrow: CURSOR_KIND_IDS.filter((k) =>
+																k === kind ? shown : settings.cursor.asArrow.includes(k),
+															),
+														},
+													})
+												}
+											>
+												<img
+													src={safeAssetUrl(cursorSprites[type].assetPath)}
+													alt=""
+													className={styles.cursorSprite}
+													draggable={false}
+												/>
+											</button>
+										</Tooltip>
 									);
 								})}
 							</div>
@@ -4002,8 +4015,8 @@ export function ChoiceRow<T extends string | number>({
 }: {
 	label: string;
 	/** `null` leaves a hole in the grid: the middle of the camera's position grid. An option
-	 *  can be `disabled` on its own: a disabled button takes no focus, so its `title` is only a
-	 *  mouse hint, and the reason must also be visible text the row points at (`describedBy`).
+	 *  can be `disabled` on its own: a disabled button takes no focus and opens no tooltip, so
+	 *  the reason must be visible text the row points at (`describedBy`).
 	 *  `title` is a tooltip that adds to the label (a clip count). An icon-only option gets its
 	 *  label as its tooltip; one whose label is visible gets none. `null` is for an icon that
 	 *  already spells the label, a font drawn in its own face. */
@@ -4029,77 +4042,87 @@ export function ChoiceRow<T extends string | number>({
 }) {
 	const buttonsRef = useRef<Array<HTMLButtonElement | null>>([]);
 	const mode = display ?? (options.some((o) => o?.icon) ? "icon" : "text");
+	// Its own provider, like `Toggle`: the row is also drawn outside a pane (the selection
+	// panes, the dialogs), and a Radix tooltip throws without any.
 	return (
-		<div
-			role="group"
-			aria-label={label}
-			aria-describedby={describedBy}
-			className={`${styles.choiceRow} ${tiles ? styles.choiceRowTiles : ""}`}
-			style={{ gridTemplateColumns: `repeat(${columns ?? options.length}, minmax(0, 1fr))` }}
-			onKeyDown={(e) => {
-				if (e.key === "Enter" || e.key === " ") {
+		<TooltipProvider>
+			<div
+				role="group"
+				aria-label={label}
+				aria-describedby={describedBy}
+				className={`${styles.choiceRow} ${tiles ? styles.choiceRowTiles : ""}`}
+				style={{ gridTemplateColumns: `repeat(${columns ?? options.length}, minmax(0, 1fr))` }}
+				onKeyDown={(e) => {
+					if (e.key === "Enter" || e.key === " ") {
+						e.nativeEvent.stopPropagation();
+						return;
+					}
+					const step =
+						e.key === "ArrowRight" || e.key === "ArrowDown"
+							? 1
+							: e.key === "ArrowLeft" || e.key === "ArrowUp"
+								? -1
+								: 0;
+					if (step === 0) return;
+					e.preventDefault();
 					e.nativeEvent.stopPropagation();
-					return;
-				}
-				const step =
-					e.key === "ArrowRight" || e.key === "ArrowDown"
-						? 1
-						: e.key === "ArrowLeft" || e.key === "ArrowUp"
-							? -1
-							: 0;
-				if (step === 0) return;
-				e.preventDefault();
-				e.nativeEvent.stopPropagation();
-				const focused = buttonsRef.current.findIndex((b) => b === document.activeElement);
-				const from = focused >= 0 ? focused : options.findIndex((o) => o?.value === value);
-				// Holes and disabled options are stepped over, not landed on.
-				let to = from + step;
-				while (to >= 0 && to < options.length && (options[to] ?? { disabled: true }).disabled) {
-					to += step;
-				}
-				const next = options[to];
-				if (!next) return;
-				buttonsRef.current[to]?.focus();
-				if (next.value !== value) onChange(next.value);
-			}}
-		>
-			{options.map((option, i) => {
-				if (option === null) return <span key={`hole-${i}`} aria-hidden="true" />;
-				const pressed = option.value === value;
-				// A tooltip only where it tells something the button does not: the name of an
-				// icon-only option, or the text a caller passes. A visible label is never repeated
-				// (technical-documentation/engineering/tooltips.md, rule 3).
-				const tip = option.title === undefined && mode === "icon" ? option.label : option.title;
-				return (
-					<button
-						key={String(option.value)}
-						ref={(el) => {
-							buttonsRef.current[i] = el;
-						}}
-						type="button"
-						className={`${styles.choiceBtn} ${pressed ? styles.isActive : ""}`}
-						aria-pressed={pressed}
-						aria-label={mode === "icon" ? option.label : undefined}
-						title={tip ?? undefined}
-						disabled={disabled || option.disabled}
-						// Re-choisir la valeur en place n'est pas une modification : ni sauvegarde ni
-						// entrée d'annulation.
-						onClick={() => {
-							if (!pressed) onChange(option.value);
-						}}
-					>
-						{mode === "text" ? option.label : null}
-						{mode === "icon" ? option.icon : null}
-						{mode === "both" ? (
-							<>
-								{option.icon}
-								<span className={styles.choiceBtnLabel}>{option.label}</span>
-							</>
-						) : null}
-					</button>
-				);
-			})}
-		</div>
+					const focused = buttonsRef.current.findIndex((b) => b === document.activeElement);
+					const from = focused >= 0 ? focused : options.findIndex((o) => o?.value === value);
+					// Holes and disabled options are stepped over, not landed on.
+					let to = from + step;
+					while (to >= 0 && to < options.length && (options[to] ?? { disabled: true }).disabled) {
+						to += step;
+					}
+					const next = options[to];
+					if (!next) return;
+					buttonsRef.current[to]?.focus();
+					if (next.value !== value) onChange(next.value);
+				}}
+			>
+				{options.map((option, i) => {
+					if (option === null) return <span key={`hole-${i}`} aria-hidden="true" />;
+					const pressed = option.value === value;
+					// A tooltip only where it tells something the button does not: the name of an
+					// icon-only option, or the text a caller passes. A visible label is never repeated
+					// (technical-documentation/engineering/tooltips.md, rule 3).
+					const tip = option.title === undefined && mode === "icon" ? option.label : option.title;
+					const button = (
+						<button
+							key={String(option.value)}
+							ref={(el) => {
+								buttonsRef.current[i] = el;
+							}}
+							type="button"
+							className={`${styles.choiceBtn} ${pressed ? styles.isActive : ""}`}
+							aria-pressed={pressed}
+							aria-label={mode === "icon" ? option.label : undefined}
+							disabled={disabled || option.disabled}
+							// Re-choisir la valeur en place n'est pas une modification : ni sauvegarde ni
+							// entrée d'annulation.
+							onClick={() => {
+								if (!pressed) onChange(option.value);
+							}}
+						>
+							{mode === "text" ? option.label : null}
+							{mode === "icon" ? option.icon : null}
+							{mode === "both" ? (
+								<>
+									{option.icon}
+									<span className={styles.choiceBtnLabel}>{option.label}</span>
+								</>
+							) : null}
+						</button>
+					);
+					return tip ? (
+						<Tooltip key={String(option.value)} content={tip}>
+							{button}
+						</Tooltip>
+					) : (
+						button
+					);
+				})}
+			</div>
+		</TooltipProvider>
 	);
 }
 
@@ -4208,17 +4231,21 @@ export function SliderCell({
 					</span>
 				) : null}
 				{/* Only once the value has moved: at the default there is nothing to go back to. */}
+				{/* Its own provider, like `Toggle`: the slider is also drawn outside a pane. */}
 				{modified ? (
-					<button
-						type="button"
-						className={styles.sliderReset}
-						aria-label={`${tc("actions.resetToDefault")}: ${label}`}
-						title={tc("actions.resetToDefault")}
-						disabled={disabled}
-						onClick={reset}
-					>
-						<RotateCcw size={12} aria-hidden="true" />
-					</button>
+					<TooltipProvider>
+						<Tooltip content={tc("actions.resetToDefault")}>
+							<button
+								type="button"
+								className={styles.sliderReset}
+								aria-label={`${tc("actions.resetToDefault")}: ${label}`}
+								disabled={disabled}
+								onClick={reset}
+							>
+								<RotateCcw size={12} aria-hidden="true" />
+							</button>
+						</Tooltip>
+					</TooltipProvider>
 				) : null}
 			</div>
 			{/* The visible label is a <span>, not a <label htmlFor>, so without this the

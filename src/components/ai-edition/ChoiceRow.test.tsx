@@ -3,8 +3,8 @@
 // option past them stays reachable from the keyboard.
 
 import "@testing-library/jest-dom";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
@@ -46,8 +46,40 @@ describe("ChoiceRow keyboard", () => {
 
 // A tooltip that says what the button already says is noise (tooltips.md, rule 3). A button with
 // no visible label is the one that needs it: it is named for a screen reader and for the mouse.
+// Always the shared `Tooltip`, never the browser's `title`, which looks and waits unlike every
+// other tooltip in the editor (#1016).
 describe("ChoiceRow tooltips", () => {
 	const icon = <svg aria-hidden="true" />;
+
+	// jsdom has none, and a Radix tooltip measures its trigger when it opens.
+	beforeEach(() => {
+		vi.stubGlobal(
+			"ResizeObserver",
+			class {
+				observe = () => undefined;
+				unobserve = () => undefined;
+				disconnect = () => undefined;
+			},
+		);
+	});
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	/** What a keyboard focus on the option shows, or null when it opens no tooltip. */
+	function tooltipOf(name: string) {
+		const button = screen.getByRole("button", { name });
+		expect(button).not.toHaveAttribute("title");
+		// A keyboard focus: one the mouse gave opens no tooltip.
+		fireEvent.keyDown(window, { key: "Tab" });
+		act(() => button.focus());
+		// Radix copies the text into a visually hidden `role="tooltip"` node, read by assistive
+		// technology: the one copy that holds nothing else.
+		const shown = screen.queryByRole("tooltip")?.textContent ?? null;
+		if (shown !== null) expect(button).toHaveAccessibleDescription(shown);
+		act(() => button.blur());
+		return shown;
+	}
 
 	it("draws no tooltip on an option whose label is visible", () => {
 		render(
@@ -61,9 +93,7 @@ describe("ChoiceRow tooltips", () => {
 				]}
 			/>,
 		);
-		for (const name of ["Alpha", "Beta"]) {
-			expect(screen.getByRole("button", { name })).not.toHaveAttribute("title");
-		}
+		for (const name of ["Alpha", "Beta"]) expect(tooltipOf(name)).toBeNull();
 	});
 
 	it("names an icon-only option in its tooltip", () => {
@@ -78,8 +108,8 @@ describe("ChoiceRow tooltips", () => {
 				]}
 			/>,
 		);
-		expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute("title", "Alpha");
-		expect(screen.getByRole("button", { name: "Beta" })).toHaveAttribute("title", "Beta");
+		expect(tooltipOf("Alpha")).toBe("Alpha");
+		expect(tooltipOf("Beta")).toBe("Beta");
 	});
 
 	it("draws no tooltip on an option that shows its icon and its label", () => {
@@ -92,7 +122,7 @@ describe("ChoiceRow tooltips", () => {
 				options={[{ value: "a", label: "Alpha", icon }]}
 			/>,
 		);
-		expect(screen.getByRole("button", { name: "Alpha" })).not.toHaveAttribute("title");
+		expect(tooltipOf("Alpha")).toBeNull();
 	});
 
 	it("draws none on an icon that already spells the label, when the caller says so", () => {
@@ -104,7 +134,7 @@ describe("ChoiceRow tooltips", () => {
 				options={[{ value: "a", label: "Lora", icon: <span>Lora</span>, title: null }]}
 			/>,
 		);
-		expect(screen.getByRole("button", { name: "Lora" })).not.toHaveAttribute("title");
+		expect(tooltipOf("Lora")).toBeNull();
 	});
 
 	it("keeps the tooltip a caller passes, even beside a visible label", () => {
@@ -119,10 +149,7 @@ describe("ChoiceRow tooltips", () => {
 				]}
 			/>,
 		);
-		expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute(
-			"title",
-			"Alpha · 2 clips",
-		);
-		expect(screen.getByRole("button", { name: "Beta" })).not.toHaveAttribute("title");
+		expect(tooltipOf("Alpha")).toBe("Alpha · 2 clips");
+		expect(tooltipOf("Beta")).toBeNull();
 	});
 });

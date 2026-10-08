@@ -323,19 +323,20 @@ function paneHeader(icon: React.ReactNode, title: string, onClose: () => void, c
 			>
 				{title}
 			</h2>
-			<button
-				type="button"
-				className={styles.iconBtn}
-				title={closeLabel}
-				aria-label={closeLabel}
-				onClick={onClose}
-				style={{
-					width: 30,
-					height: 30,
-				}}
-			>
-				<X size={16} />
-			</button>
+			<Tooltip content={closeLabel}>
+				<button
+					type="button"
+					className={styles.iconBtn}
+					aria-label={closeLabel}
+					onClick={onClose}
+					style={{
+						width: 30,
+						height: 30,
+					}}
+				>
+					<X size={16} />
+				</button>
+			</Tooltip>
 		</header>
 	);
 }
@@ -1332,29 +1333,30 @@ function FacetBody({
 	const te = useScopedT("editor");
 	// A small collapse affordance floated over the reused pane header.
 	const collapse = (
-		<button
-			type="button"
-			title={te("inspector.collapseInspector")}
-			aria-label={te("inspector.collapseInspector")}
-			onClick={onCollapse}
-			style={{
-				position: "absolute",
-				top: 12,
-				right: 12,
-				width: 30,
-				height: 30,
-				display: "grid",
-				placeItems: "center",
-				borderRadius: 10,
-				color: "var(--muted)",
-				background: "var(--surface-1)",
-				border: 0,
-				cursor: "pointer",
-				zIndex: 5,
-			}}
-		>
-			<ChevronRight size={16} />
-		</button>
+		<Tooltip content={te("inspector.collapseInspector")}>
+			<button
+				type="button"
+				aria-label={te("inspector.collapseInspector")}
+				onClick={onCollapse}
+				style={{
+					position: "absolute",
+					top: 12,
+					right: 12,
+					width: 30,
+					height: 30,
+					display: "grid",
+					placeItems: "center",
+					borderRadius: 10,
+					color: "var(--muted)",
+					background: "var(--surface-1)",
+					border: 0,
+					cursor: "pointer",
+					zIndex: 5,
+				}}
+			>
+				<ChevronRight size={16} />
+			</button>
+		</Tooltip>
 	);
 
 	if (facet === "layout") return wrap(collapse, <LayoutPane />);
