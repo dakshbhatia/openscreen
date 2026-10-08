@@ -5,10 +5,13 @@ import {
 	parseScreenshotAnalysis,
 	SCREENSHOT_ANALYST_PROMPT,
 	type ScreenshotAnalysis,
+	type ScreenshotDecision,
 	type ScreenshotImage,
 	screenshotAnalysisSchema,
 	screenshotBatchIdSchema,
 	screenshotBatchSchema,
+	screenshotDecisionSchema,
+	screenshotUnderstandingSchema,
 } from "./screenshot-intel";
 
 const images: ScreenshotImage[] = [
@@ -42,6 +45,17 @@ const analysis: ScreenshotAnalysis = {
 		confidence: "medium",
 	})),
 	unknowns: ["Screenshots do not establish the order of these screens."],
+};
+
+const decision: ScreenshotDecision = {
+	title: "Defer team setup for solo work",
+	recommendation: "adapt",
+	rationale: "Visible setup requests a team name before work.",
+	counterEvidence: "Shared work may require immediate naming.",
+	experiment: "Observe whether solo users begin their project and recognize it later.",
+	tradeoff: "Less setup can reduce early orientation.",
+	confidence: "medium",
+	evidenceImageIds: images.map((image) => image.id),
 };
 
 describe("screenshot intelligence contract", () => {
@@ -118,6 +132,90 @@ describe("screenshot intelligence contract", () => {
 			expect(screenshotBatchSchema.safeParse({ ...batch, duplicatesSkipped: count }).success).toBe(
 				false,
 			);
+		}
+	});
+
+	it("keeps older analyses unchanged and preserves ranked collection decisions", () => {
+		expect(parseScreenshotAnalysis(analysis, images)).not.toHaveProperty("decisions");
+		expect(parseScreenshotAnalysis(analysis, images)).not.toHaveProperty("understanding");
+		const second = {
+			...decision,
+			title: "Investigate naming needs",
+			recommendation: "investigate" as const,
+		};
+		expect(
+			parseScreenshotAnalysis({ ...analysis, decisions: [decision, second] }, images).decisions,
+		).toEqual([decision, second]);
+		expect(parseScreenshotAnalysis({ ...analysis, decisions: [] }, images).decisions).toEqual([]);
+	});
+	it("validates decision limits and evidence IDs in both API parsing and persisted reports", () => {
+		const batch = {
+			id: "batch_00000000-0000-0000-0000-000000000001",
+			title: "Screens",
+			createdAt: "2026-10-08T14:15:00.000Z",
+			images,
+		};
+		for (const decisions of [
+			Array.from({ length: 6 }, () => decision),
+			[{ ...decision, evidenceImageIds: [] }],
+			[{ ...decision, evidenceImageIds: [images[0].id, images[0].id] }],
+			[{ ...decision, evidenceImageIds: ["image_00000000-0000-0000-0000-000000000099"] }],
+			[
+				{
+					...decision,
+					evidenceImageIds: Array.from(
+						{ length: 25 },
+						(_, index) => `image_00000000-0000-0000-0000-${String(index).padStart(12, "0")}`,
+					),
+				},
+			],
+		]) {
+			expect(() => parseScreenshotAnalysis({ ...analysis, decisions }, images)).toThrow();
+			expect(
+				screenshotBatchSchema.safeParse({ ...batch, analysis: { ...analysis, decisions } }).success,
+			).toBe(false);
+		}
+		expect(
+			screenshotBatchSchema.parse({ ...batch, analysis: { ...analysis, decisions: [decision] } })
+				.analysis?.decisions,
+		).toEqual([decision]);
+	});
+	it("bounds all decision text and rejects unsupported recommendation/confidence values", () => {
+		for (const [field, length] of [
+			["title", 141],
+			["rationale", 1501],
+			["counterEvidence", 1001],
+			["experiment", 1501],
+			["tradeoff", 1001],
+		] as const) {
+			expect(
+				screenshotDecisionSchema.safeParse({ ...decision, [field]: "x".repeat(length) }).success,
+			).toBe(false);
+		}
+		expect(
+			screenshotDecisionSchema.safeParse({ ...decision, recommendation: "copy" }).success,
+		).toBe(false);
+		expect(screenshotDecisionSchema.safeParse({ ...decision, confidence: "certain" }).success).toBe(
+			false,
+		);
+	});
+	it("bounds self-learned understanding while allowing unknown audience wording", () => {
+		const understanding = {
+			product: "A workspace product",
+			audience: "Unknown from these screens",
+			job: "Start a project",
+			confidence: "low",
+		};
+		expect(screenshotUnderstandingSchema.parse(understanding)).toEqual(understanding);
+		for (const [field, length] of [
+			["product", 401],
+			["audience", 401],
+			["job", 601],
+		] as const) {
+			expect(
+				screenshotUnderstandingSchema.safeParse({ ...understanding, [field]: "x".repeat(length) })
+					.success,
+			).toBe(false);
 		}
 	});
 

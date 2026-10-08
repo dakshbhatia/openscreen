@@ -4,7 +4,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import sharp, { type Metadata } from "sharp";
 import { z } from "zod";
+import { parseCompanyContext } from "../../src/lib/company-context";
 import { type IntelSettings, intelSettingsSchema } from "../../src/lib/product-intel";
+import { PRODUCT_REASONING_RULES } from "../../src/lib/product-reasoning";
 import {
 	buildScreenshotPrompt,
 	MAX_SCREENSHOT_BATCH_BYTES,
@@ -17,12 +19,29 @@ import {
 	screenshotAnalysisSchema,
 	screenshotBatchIdSchema,
 	screenshotBatchSchema,
+	screenshotDecisionSchema,
+	screenshotImageIdSchema,
 	screenshotImageSchema,
+	screenshotUnderstandingSchema,
 } from "../../src/lib/screenshot-intel";
 
 import { geminiHttpError } from "./gemini-errors";
 
 const API = "https://generativelanguage.googleapis.com";
+// New responses require collection decisions. Keep array limits in local validation,
+// outside Google's grammar; old saved analyses may still omit decisions.
+const currentAnalysisSchema = screenshotAnalysisSchema.extend({
+	decisions: z.array(screenshotDecisionSchema).max(5),
+	understanding: screenshotUnderstandingSchema,
+});
+const geminiAnalysisSchema = currentAnalysisSchema.extend({
+	screens: z.array(screenshotAnalysisSchema.shape.screens.element),
+	unknowns: z.array(screenshotAnalysisSchema.shape.unknowns.element),
+	decisions: z.array(
+		screenshotDecisionSchema.extend({ evidenceImageIds: z.array(screenshotImageIdSchema) }),
+	),
+});
+
 const MAX_INLINE_BYTES = 12 * 1024 * 1024;
 const MAX_BATCH_JSON_BYTES = 512 * 1024;
 const imageOptions = { limitInputPixels: 40_000_000, animated: false, failOn: "warning" as const };
@@ -44,6 +63,7 @@ const replySchema = z.object({
 						),
 					})
 					.optional(),
+				urlContextMetadata: z.unknown().optional(),
 			}),
 		)
 		.optional(),
@@ -290,7 +310,7 @@ export class ScreenshotIntelService {
 				);
 			}
 			controller.signal.throwIfAborted();
-			const { $schema: _schema, ...responseJsonSchema } = z.toJSONSchema(screenshotAnalysisSchema);
+			const { $schema: _schema, ...responseJsonSchema } = z.toJSONSchema(geminiAnalysisSchema);
 			const response = await this.fetcher(
 				`${API}/v1beta/models/${settings.model}:generateContent`,
 				{
@@ -299,9 +319,14 @@ export class ScreenshotIntelService {
 					headers: { "content-type": "application/json", "x-goog-api-key": key },
 					body: JSON.stringify({
 						systemInstruction: {
-							parts: [{ text: `${settings.systemPrompt}\n\n${SCREENSHOT_ANALYST_PROMPT}` }],
+							parts: [
+								{
+									text: `${settings.systemPrompt}\n\n${SCREENSHOT_ANALYST_PROMPT}\n\n${PRODUCT_REASONING_RULES}`,
+								},
+							],
 						},
 						contents: [{ role: "user", parts }],
+						...(settings.companyDomain ? { tools: [{ urlContext: {} }] } : {}),
 						generationConfig: {
 							responseMimeType: "application/json",
 							responseJsonSchema,
@@ -312,7 +337,8 @@ export class ScreenshotIntelService {
 			);
 			if (!response.ok) throw geminiHttpError(response.status, "screenshots");
 			const reply = replySchema.parse(await response.json());
-			const output = reply.candidates?.[0]?.content?.parts
+			const candidate = reply.candidates?.[0];
+			const output = candidate?.content?.parts
 				.filter((part) => !part.thought)
 				.map((part) => part.text ?? "")
 				.join("");
@@ -320,12 +346,26 @@ export class ScreenshotIntelService {
 				throw new Error(
 					"Gemini returned no screenshot analysis. Try fewer screenshots or another model.",
 				);
-			const analysis = parseScreenshotAnalysis(JSON.parse(output), batch.images);
-			controller.signal.throwIfAborted();
-			return await this.organizeBatch(
-				{ ...batch, analysis, settings, analyzedAt: new Date().toISOString() },
-				controller.signal,
+			const analysis = parseScreenshotAnalysis(
+				currentAnalysisSchema.parse(JSON.parse(output)),
+				batch.images,
 			);
+			controller.signal.throwIfAborted();
+			const updated: ScreenshotBatch = {
+				...batch,
+				analysis,
+				settings,
+				analyzedAt: new Date().toISOString(),
+			};
+			if (settings.companyDomain) {
+				updated.companyContext = parseCompanyContext(
+					settings.companyDomain,
+					candidate?.urlContextMetadata,
+				);
+			} else {
+				delete updated.companyContext;
+			}
+			return await this.organizeBatch(updated, controller.signal);
 		} catch (error) {
 			if (controller.signal.aborted)
 				throw new Error("Screenshot analysis cancelled or timed out. Your images are safe.");

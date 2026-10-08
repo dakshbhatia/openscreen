@@ -5,6 +5,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import { parseCompanyContext } from "../../src/lib/company-context";
 import {
 	buildProductPrompt,
 	DEFAULT_INTEL_SETTINGS,
@@ -15,7 +16,7 @@ import {
 	parseProductAnalysis,
 	productAnalysisSchema,
 } from "../../src/lib/product-intel";
-
+import { PRODUCT_REASONING_RULES } from "../../src/lib/product-reasoning";
 import { geminiHttpError } from "./gemini-errors";
 
 const API = "https://generativelanguage.googleapis.com";
@@ -54,6 +55,7 @@ const replySchema = z.object({
 						),
 					})
 					.optional(),
+				urlContextMetadata: z.unknown().optional(),
 			}),
 		)
 		.optional(),
@@ -178,6 +180,7 @@ export class ProductIntelService {
 							stat.size,
 							stat.mtimeMs,
 							settings,
+							PRODUCT_REASONING_RULES,
 						]),
 					)
 					.digest("hex");
@@ -239,7 +242,9 @@ export class ProductIntelService {
 							method: "POST",
 							headers: { "content-type": "application/json" },
 							body: JSON.stringify({
-								systemInstruction: { parts: [{ text: settings.systemPrompt }] },
+								systemInstruction: {
+									parts: [{ text: `${settings.systemPrompt}\n\n${PRODUCT_REASONING_RULES}` }],
+								},
 								contents: [
 									{
 										role: "user",
@@ -251,6 +256,7 @@ export class ProductIntelService {
 										],
 									},
 								],
+								...(settings.companyDomain ? { tools: [{ urlContext: {} }] } : {}),
 								generationConfig: {
 									responseMimeType: "application/json",
 									responseJsonSchema,
@@ -260,7 +266,8 @@ export class ProductIntelService {
 						})
 					).json(),
 				);
-				const text = response.candidates?.[0]?.content?.parts
+				const candidate = response.candidates?.[0];
+				const text = candidate?.content?.parts
 					.filter((p) => !p.thought)
 					.map((p) => p.text ?? "")
 					.join("");
@@ -277,6 +284,14 @@ export class ProductIntelService {
 					settings,
 					analysis,
 					remoteFileDeleted: false,
+					...(settings.companyDomain
+						? {
+								companyContext: parseCompanyContext(
+									settings.companyDomain,
+									candidate?.urlContextMetadata,
+								),
+							}
+						: {}),
 				};
 			} catch (error) {
 				if (controller.signal.aborted)

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_INTEL_SETTINGS, type IntelReport } from "./product-intel";
-import { reportToMarkdown } from "./product-intel-export";
+import {
+	getReportCompanyContext,
+	reportToExportData,
+	reportToMarkdown,
+} from "./product-intel-export";
 
 const report: IntelReport = {
 	projectId: "project-1",
@@ -33,6 +37,105 @@ const report: IntelReport = {
 };
 
 describe("product intelligence Markdown export", () => {
+	it("uses retrieved company context when the optional written brief is absent", () => {
+		const input: IntelReport = {
+			...report,
+			settings: { ...report.settings, productBrief: "", companyDomain: "https://example.com" },
+			companyContext: {
+				domain: "https://example.com",
+				status: "retrieved",
+				sourceUrls: ["https://example.com/"],
+			},
+		};
+		expect(reportToMarkdown(input)).toContain(
+			"Not supplied; company website supplies product context.",
+		);
+		expect(reportToMarkdown(input)).not.toContain("Not supplied; relevance is provisional.");
+		expect(reportToMarkdown({ ...input, companyContext: undefined })).toContain(
+			"Not supplied; relevance is provisional.",
+		);
+	});
+	it("exports verified website retrieval and company domain in both formats", () => {
+		const input: IntelReport = {
+			...report,
+			settings: { ...report.settings, companyDomain: "https://example.com" },
+			companyContext: {
+				domain: "https://example.com",
+				status: "retrieved",
+				sourceUrls: ["https://www.example.com/about"],
+			},
+		};
+		const markdown = reportToMarkdown(input);
+		expect(markdown).toContain("### Company domain\n\n> https://example.com");
+		expect(markdown).toContain("Retrieved; confirmed by provider URL tool metadata.");
+		expect(markdown).toContain("https://www.example.com/about");
+		const exported = reportToExportData(input);
+		expect(exported.context.companyDomain).toBe("https://example.com");
+		expect(exported.companyContext).toEqual(input.companyContext);
+		expect(exported.context.productBrief).toBe(input.settings.productBrief);
+	});
+	it("never upgrades a supplied domain or unrelated metadata into a retrieval claim", () => {
+		const input: IntelReport = {
+			...report,
+			settings: { ...report.settings, companyDomain: "https://example.com" },
+		};
+		for (const value of [
+			input,
+			{
+				...input,
+				companyContext: {
+					domain: "https://other.com",
+					status: "retrieved" as const,
+					sourceUrls: ["https://other.com/"],
+				},
+			},
+			{ ...input, companyContext: { domain: "", status: "unavailable" as const, sourceUrls: [] } },
+		]) {
+			expect(getReportCompanyContext(value)).toEqual({
+				domain: "https://example.com",
+				status: "unavailable",
+				sourceUrls: [],
+			});
+			expect(reportToExportData(value).companyContext?.status).toBe("unavailable");
+			expect(reportToMarkdown(value)).toContain("website retrieval was not confirmed");
+			expect(reportToMarkdown(value)).not.toContain("https://other.com");
+		}
+		expect(reportToExportData(report)).not.toHaveProperty("companyContext");
+		expect(reportToMarkdown(report)).toContain("No company domain supplied");
+	});
+	it("allowlists JSON context and evidence fields without rewriting the supplied brief", () => {
+		const privateReport = {
+			...report,
+			apiKey: "private-report-key",
+			settings: {
+				...report.settings,
+				productBrief: "My quirky brief!\n  Keep these spaces.",
+				apiKey: "private-settings-key",
+				systemPrompt: "private custom instructions",
+			},
+			sourcePath: "/Users/researcher/recording.mp4",
+			analysis: {
+				...report.analysis,
+				privateDebug: "private-analysis-debug",
+				findings: report.analysis.findings.map((finding) => ({
+					...finding,
+					sourcePath: "/Users/researcher/private.mp4",
+				})),
+			},
+		};
+		const exported = reportToExportData(privateReport);
+		expect(exported.context.productBrief).toBe(privateReport.settings.productBrief);
+		const encoded = JSON.stringify(exported);
+		for (const privateValue of [
+			"private-report-key",
+			"private-settings-key",
+			"private custom instructions",
+			"/Users/researcher",
+			"private-analysis-debug",
+		]) {
+			expect(encoded).not.toContain(privateValue);
+		}
+	});
 	it("exports context, raw evidence, decisions and whitelisted report metadata", () => {
 		const markdown = reportToMarkdown(report);
 		for (const value of [

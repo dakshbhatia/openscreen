@@ -4,7 +4,12 @@ import path from "node:path";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_INTEL_SETTINGS } from "../../src/lib/product-intel";
-import { MAX_SCREENSHOT_BYTES, type ScreenshotAnalysis } from "../../src/lib/screenshot-intel";
+import { PRODUCT_REASONING_RULES } from "../../src/lib/product-reasoning";
+import {
+	MAX_SCREENSHOT_BYTES,
+	SCREENSHOT_ANALYST_PROMPT,
+	type ScreenshotAnalysis,
+} from "../../src/lib/screenshot-intel";
 import { ScreenshotIntelService } from "./screenshot-intel-service";
 
 let root: string;
@@ -59,6 +64,24 @@ function google(transform: (analysis: ScreenshotAnalysis) => unknown = (analysis
 				confidence: "medium",
 			})),
 			unknowns: ["The screenshots do not establish flow order or conversion impact."],
+			understanding: {
+				product: "A team workspace",
+				audience: "Possibly teams; not established",
+				job: "Set up a workspace",
+				confidence: "medium",
+			},
+			decisions: [
+				{
+					title: "Reduce setup burden for solo work",
+					recommendation: "adapt",
+					rationale: "The workspace name appears before useful work.",
+					counterEvidence: "A name may aid orientation in shared work.",
+					experiment: "Observe whether solo users can begin a project and later identify it.",
+					tradeoff: "Deferring naming could make shared work harder to recognize.",
+					confidence: "medium",
+					evidenceImageIds: ids,
+				},
+			],
 		};
 		return Response.json({
 			candidates: [
@@ -225,6 +248,13 @@ describe("ScreenshotIntelService", () => {
 		});
 		const body = requests[0].body;
 		expect(body.systemInstruction.parts[0].text).toContain("Never infer chronology");
+		expect(body.systemInstruction.parts[0].text).toContain(PRODUCT_REASONING_RULES);
+		expect(body.generationConfig.responseJsonSchema).toEqual(
+			expect.objectContaining({ required: expect.arrayContaining(["decisions", "understanding"]) }),
+		);
+		expect(JSON.stringify(body.generationConfig.responseJsonSchema)).not.toMatch(
+			/minItems|maxItems/,
+		);
 		expect(JSON.stringify(body.contents)).toContain("A tool for solo architects");
 		expect(JSON.stringify(body)).not.toContain(originals);
 		expect(JSON.stringify(body)).not.toContain("test-gemini-key");
@@ -238,6 +268,10 @@ describe("ScreenshotIntelService", () => {
 		expect(resized.width).toBe(2000);
 		expect(resized.height).toBe(400);
 		expect(result.analysis?.screens).toHaveLength(2);
+		expect(result.analysis?.decisions?.[0].evidenceImageIds).toEqual(
+			batch.images.map((image) => image.id),
+		);
+		expect(result.analysis?.understanding?.job).toBe("Set up a workspace");
 		expect(result.settings?.productBrief).toBe("A tool for solo architects");
 		expect(result.analyzedAt).toBeTruthy();
 		expect(result.organizedPath).toBe(path.join(root, "screenshot-intel", batch.id, "organized"));
@@ -266,6 +300,134 @@ describe("ScreenshotIntelService", () => {
 		expect((error as Error).message).not.toMatch(/PRIVATE_PROVIDER_BODY|secret-key|Users/);
 		expect(response.bodyUsed).toBe(false);
 		expect((await intel.get(batch.id)).analysis).toBeNull();
+	});
+
+	it("appends reasoning to saved custom instructions without changing their stored wording", async () => {
+		const savedPrompt = "Our unusual research lens!!\nKeep this wording.";
+		const { fetcher, requests } = google();
+		const intel = new ScreenshotIntelService(
+			root,
+			async () => ({ ...DEFAULT_INTEL_SETTINGS, systemPrompt: savedPrompt }),
+			() => "test-key",
+			fetcher,
+		);
+		const batch = await intel.import([await image()]);
+		const result = await intel.analyze(batch.id);
+		expect(requests[0].body.systemInstruction.parts[0].text).toBe(
+			`${savedPrompt}\n\n${SCREENSHOT_ANALYST_PROMPT}\n\n${PRODUCT_REASONING_RULES}`,
+		);
+		expect(result.settings?.systemPrompt).toBe(savedPrompt);
+		expect((await intel.get(batch.id)).settings?.systemPrompt).toBe(savedPrompt);
+	});
+	it.each([
+		"decisions",
+		"understanding",
+	] as const)("requires %s on new replies while allowing old stored reports", async (field) => {
+		const { fetcher } = google((analysis) => {
+			const legacy = { ...analysis };
+			delete legacy[field];
+			return legacy;
+		});
+		const intel = service("test-key", fetcher);
+		const batch = await intel.import([await image()]);
+		await expect(intel.analyze(batch.id)).rejects.toThrow();
+		expect((await intel.get(batch.id)).analysis).toBeNull();
+	});
+	it.each([
+		"too many",
+		"duplicate refs",
+		"unknown refs",
+		"empty refs",
+	])("rejects invalid collection decisions: %s", async (kind) => {
+		const { fetcher } = google((analysis) => {
+			const decision = analysis.decisions?.[0];
+			if (!decision) throw new Error("Missing fixture decision");
+			return {
+				...analysis,
+				decisions:
+					kind === "too many"
+						? Array.from({ length: 6 }, () => decision)
+						: [
+								{
+									...decision,
+									evidenceImageIds:
+										kind === "duplicate refs"
+											? [decision.evidenceImageIds[0], decision.evidenceImageIds[0]]
+											: kind === "empty refs"
+												? []
+												: ["image_00000000-0000-0000-0000-000000000099"],
+								},
+							],
+			};
+		});
+		const intel = service("test-key", fetcher);
+		const batch = await intel.import([await image()]);
+		await expect(intel.analyze(batch.id)).rejects.toThrow();
+		expect((await intel.get(batch.id)).analysis).toBeNull();
+	});
+	it("accepts no decisions for thin evidence and enforces local unknown bounds", async () => {
+		const thin = google((analysis) => ({ ...analysis, decisions: [] }));
+		const intel = service("test-key", thin.fetcher);
+		const batch = await intel.import([await image()]);
+		expect((await intel.analyze(batch.id)).analysis?.decisions).toEqual([]);
+		const excessive = google((analysis) => ({
+			...analysis,
+			unknowns: Array.from({ length: 31 }, () => "Unestablished"),
+		}));
+		await expect(service("test-key", excessive.fetcher).analyze(batch.id)).rejects.toThrow();
+	});
+	it.each([
+		true,
+		false,
+	])("uses optional company URL context and reports retrieval metadata truthfully (retrieved=%s)", async (retrieved) => {
+		const base = google();
+		const fetcher: typeof fetch = async (url, init) => {
+			const response = await base.fetcher(url, init);
+			const raw = (await response.json()) as { candidates: { urlContextMetadata?: unknown }[] };
+			if (retrieved)
+				raw.candidates[0].urlContextMetadata = {
+					urlMetadata: [
+						{
+							retrievedUrl: "https://example.com/about",
+							urlRetrievalStatus: "URL_RETRIEVAL_STATUS_SUCCESS",
+						},
+					],
+				};
+			return Response.json(raw);
+		};
+		const intel = new ScreenshotIntelService(
+			root,
+			async () => ({ ...DEFAULT_INTEL_SETTINGS, companyDomain: "https://example.com" }),
+			() => "test-key",
+			fetcher,
+		);
+		const batch = await intel.import([await image()]);
+		const result = await intel.analyze(batch.id);
+		expect(base.requests[0].body).toEqual(expect.objectContaining({ tools: [{ urlContext: {} }] }));
+		expect(JSON.stringify(base.requests[0].body.contents)).toContain("OUR company");
+		expect(result.companyContext?.status).toBe(retrieved ? "retrieved" : "unavailable");
+		expect(result.companyContext?.sourceUrls).toEqual(
+			retrieved ? ["https://example.com/about"] : [],
+		);
+		expect((await intel.get(batch.id)).companyContext).toEqual(result.companyContext);
+	});
+
+	it("removes old company retrieval metadata when reanalyzing without a company domain", async () => {
+		const base = google();
+		let companyDomain = "https://example.com";
+		const intel = new ScreenshotIntelService(
+			root,
+			async () => ({ ...DEFAULT_INTEL_SETTINGS, companyDomain }),
+			() => "test-key",
+			base.fetcher,
+		);
+		const batch = await intel.import([await image()]);
+		expect((await intel.analyze(batch.id)).companyContext?.status).toBe("unavailable");
+		companyDomain = "";
+		const updated = await intel.analyze(batch.id);
+		expect(updated).not.toHaveProperty("companyContext");
+		expect(await intel.get(batch.id)).not.toHaveProperty("companyContext");
+		expect(base.requests[1].body).not.toHaveProperty("tools");
 	});
 
 	it("never accepts repeated, missing or phantom AI image IDs", async () => {

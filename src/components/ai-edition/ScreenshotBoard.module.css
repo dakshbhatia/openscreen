@@ -85,3 +85,16 @@
 .inspectorAdvice p { margin: 0; }
 .inspectorAdvice strong { display: block; color: var(--muted); font-size: 11px; font-weight: 500; margin-bottom: 5px; }
 @media (max-width: 760px) { .findScreens { flex-wrap: wrap; } .search { flex-basis: 100%; max-width: none; } .findScreens > select { flex: 1; max-width: none; } .inspectorAdvice { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
+.companyDomain { margin: 8px 0; }
+.board .companyDomain[hidden] { display: none; }
+.companyDomain small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.decision > small { display: block; text-transform: capitalize; color: var(--muted); font-size: 10px; }
+.decision h3 { margin: 8px 0; font-size: 12px; font-weight: 550; line-height: 1.5; }
+.decision > details { margin: 8px 0 12px; font-size: 11px; line-height: 1.65; }
+.decision summary { cursor: pointer; color: var(--muted); font-size: 10px; }
+.decision strong { display: block; color: var(--muted); font-size: 10px; font-weight: 500; }
+.understanding { margin: 12px 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.understanding summary { cursor: pointer; }
+.understanding dl { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 6px 12px; padding: 8px 0; max-width: 85ch; }
+.understanding dd { color: var(--fg); margin: 0; }
+.muted a { color: var(--accent); text-decoration: underline; }

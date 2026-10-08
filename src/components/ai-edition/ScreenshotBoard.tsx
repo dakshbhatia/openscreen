@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { DEFAULT_INTEL_SETTINGS, type IntelSettings } from "@/lib/product-intel";
-import type { ScreenshotBatch } from "@/lib/screenshot-intel";
+import type { ScreenshotBatch, ScreenshotDecision } from "@/lib/screenshot-intel";
 import { nativeBridgeClient } from "@/native/client";
 import styles from "./ScreenshotBoard.module.css";
 
@@ -45,9 +45,17 @@ function shareableBatch(batch: ScreenshotBatch) {
 		context: batch.settings
 			? {
 					productBrief: shareText(batch.settings.productBrief),
+					companyDomain: batch.settings.companyDomain,
 					competitor: shareText(batch.settings.competitor),
 					task: shareText(batch.settings.task),
 					model: batch.settings.model,
+				}
+			: undefined,
+		companyContext: batch.companyContext
+			? {
+					domain: batch.companyContext.domain,
+					status: batch.companyContext.status,
+					sourceUrls: batch.companyContext.sourceUrls,
 				}
 			: undefined,
 		images: batch.images.map(({ id, originalName, mimeType, width, height }) => ({
@@ -60,6 +68,24 @@ function shareableBatch(batch: ScreenshotBatch) {
 		analysis: batch.analysis
 			? {
 					summary: shareText(batch.analysis.summary),
+					understanding: batch.analysis.understanding
+						? {
+								product: shareText(batch.analysis.understanding.product),
+								audience: shareText(batch.analysis.understanding.audience),
+								job: shareText(batch.analysis.understanding.job),
+								confidence: batch.analysis.understanding.confidence,
+							}
+						: undefined,
+					decisions: batch.analysis.decisions?.map((decision) => ({
+						title: shareText(decision.title),
+						recommendation: decision.recommendation,
+						rationale: shareText(decision.rationale),
+						counterEvidence: shareText(decision.counterEvidence),
+						experiment: shareText(decision.experiment),
+						tradeoff: shareText(decision.tradeoff),
+						confidence: decision.confidence,
+						evidenceImageIds: decision.evidenceImageIds,
+					})),
 					screens: batch.analysis.screens.map((screen) => ({
 						imageId: screen.imageId,
 						label: shareText(screen.label),
@@ -90,11 +116,12 @@ export function ScreenshotBoard({ active }: Props) {
 	const [selectedImage, setSelectedImage] = useState<string | null>(null);
 	const [query, setQuery] = useState("");
 	const [groupFilter, setGroupFilter] = useState("");
-	const [contextExpanded, setContextExpanded] = useState(true);
+	const [contextExpanded, setContextExpanded] = useState(false);
 	const [contextSave, setContextSave] = useState<"saved" | "saving" | "unsaved" | null>(null);
 	const [contextError, setContextError] = useState("");
 	const [summaryExpanded, setSummaryExpanded] = useState(false);
-	const contextInitialized = useRef(false);
+	const [showAllDecisions, setShowAllDecisions] = useState(false);
+	const [decisionEvidenceIds, setDecisionEvidenceIds] = useState<string[] | null>(null);
 	const working = useRef(false);
 	const more = useRef<HTMLDetailsElement>(null);
 	const keyInput = useRef<HTMLInputElement>(null);
@@ -105,6 +132,8 @@ export function ScreenshotBoard({ active }: Props) {
 	useEffect(() => {
 		if (!active || working.current) return;
 		let stale = false;
+		const loadVersion = settingsVersion.current;
+		const canLoadSettings = !settingsDirty.current;
 		setError("");
 		setLoaded(false);
 		void Promise.all([
@@ -113,10 +142,8 @@ export function ScreenshotBoard({ active }: Props) {
 		])
 			.then(([snapshot, batches]) => {
 				if (stale) return;
-				if (!settingsDirty.current) setSettings(snapshot.settings);
-				if (!contextInitialized.current) {
-					setContextExpanded(!snapshot.settings.productBrief.trim());
-					contextInitialized.current = true;
+				if (canLoadSettings && !settingsDirty.current && loadVersion === settingsVersion.current) {
+					setSettings(snapshot.settings);
 				}
 				setConnected(snapshot.connected);
 				setRecent(batches);
@@ -152,6 +179,8 @@ export function ScreenshotBoard({ active }: Props) {
 			setGroupFilter("");
 		}
 		setSummaryExpanded(false);
+		setShowAllDecisions(false);
+		setDecisionEvidenceIds(null);
 		setBatch(next);
 		setSelectedImage(null);
 		setRecent((previous) => [next, ...previous.filter((item) => item.id !== next.id)]);
@@ -161,8 +190,9 @@ export function ScreenshotBoard({ active }: Props) {
 		const version = settingsVersion.current;
 		setContextSave("saving");
 		try {
-			await nativeBridgeClient.productIntel.saveSettings(settings);
+			const saved = await nativeBridgeClient.productIntel.saveSettings(settings);
 			if (version === settingsVersion.current) {
+				setSettings((previous) => ({ ...previous, companyDomain: saved.companyDomain }));
 				settingsDirty.current = false;
 				setContextSave("saved");
 				setContextError("");
@@ -194,7 +224,8 @@ export function ScreenshotBoard({ active }: Props) {
 				remember(result);
 				if (analyzeImported && connected) {
 					setBusy("analyze");
-					await nativeBridgeClient.productIntel.saveSettings(settings);
+					const saved = await nativeBridgeClient.productIntel.saveSettings(settings);
+					setSettings((previous) => ({ ...previous, companyDomain: saved.companyDomain }));
 					settingsDirty.current = false;
 					setContextSave("saved");
 					setContextError("");
@@ -233,7 +264,8 @@ export function ScreenshotBoard({ active }: Props) {
 			return;
 		}
 		void run("analyze", async () => {
-			await nativeBridgeClient.productIntel.saveSettings(settings);
+			const saved = await nativeBridgeClient.productIntel.saveSettings(settings);
+			setSettings((previous) => ({ ...previous, companyDomain: saved.companyDomain }));
 			settingsDirty.current = false;
 			setContextSave("saved");
 			setContextError("");
@@ -253,12 +285,38 @@ export function ScreenshotBoard({ active }: Props) {
 							? [
 									"## Product context",
 									shared.context.productBrief,
+									`Company domain: ${shared.context.companyDomain || "Not supplied"}`,
 									`Competitor: ${shared.context.competitor}`,
 									`Research question: ${shared.context.task}`,
 								]
 							: []),
+						...(shared.companyContext
+							? [
+									`Company website: ${shared.companyContext.status === "retrieved" ? "retrieved" : "not retrieved"}`,
+									...shared.companyContext.sourceUrls,
+								]
+							: []),
+						...(shared.analysis?.understanding
+							? [
+									"## Working understanding",
+									`Product: ${shared.analysis.understanding.product}`,
+									`Audience: ${shared.analysis.understanding.audience}`,
+									`Job: ${shared.analysis.understanding.job}`,
+									`Confidence: ${shared.analysis.understanding.confidence}`,
+								]
+							: []),
+						...(shared.analysis?.decisions?.flatMap((decision) => [
+							`## ${decision.recommendation}: ${decision.title}`,
+							`Why: ${decision.rationale}`,
+							`Counterevidence / alternative: ${decision.counterEvidence}`,
+							`Experiment: ${decision.experiment}`,
+							`Tradeoff: ${decision.tradeoff}`,
+							`Confidence: ${decision.confidence}`,
+							`Evidence: ${decision.evidenceImageIds.join(", ")}`,
+						]) ?? []),
 						...(shared.analysis?.screens.flatMap((screen) => [
 							`## ${screen.group} / ${screen.label}`,
+							`Screen ID: ${screen.imageId}`,
 							`Observed: ${screen.observation}`,
 							`Hypothesis (${screen.confidence} confidence): ${screen.hypothesis}`,
 							`For our product: ${screen.advice}`,
@@ -282,6 +340,7 @@ export function ScreenshotBoard({ active }: Props) {
 	const contextChanged =
 		batch?.settings &&
 		(batch.settings.productBrief !== settings.productBrief ||
+			batch.settings.companyDomain !== settings.companyDomain ||
 			batch.settings.competitor !== settings.competitor ||
 			batch.settings.task !== settings.task ||
 			batch.settings.model !== settings.model ||
@@ -302,6 +361,15 @@ export function ScreenshotBoard({ active }: Props) {
 				screen?.observation,
 				screen?.hypothesis,
 				screen?.advice,
+				...(analysis?.decisions
+					?.filter((decision) => decision.evidenceImageIds.includes(image.id))
+					.flatMap((decision) => [
+						decision.title,
+						decision.rationale,
+						decision.experiment,
+						decision.counterEvidence,
+						decision.tradeoff,
+					]) ?? []),
 			]
 				.filter(Boolean)
 				.join(" ")
@@ -314,13 +382,58 @@ export function ScreenshotBoard({ active }: Props) {
 	const visibleImages = [...groups.values()].flat();
 	const evidence = batch?.images.find((image) => image.id === selectedImage);
 	const evidenceScreen = analysis?.screens.find((screen) => screen.imageId === selectedImage);
-	const evidenceImages = visibleImages.some((image) => image.id === selectedImage)
-		? visibleImages
-		: (batch?.images ?? []);
+	const evidenceImages = decisionEvidenceIds
+		? decisionEvidenceIds.flatMap((id) => batch?.images.find((image) => image.id === id) ?? [])
+		: visibleImages.some((image) => image.id === selectedImage)
+			? visibleImages
+			: (batch?.images ?? []);
 	const evidenceIndex = evidenceImages.findIndex((image) => image.id === selectedImage);
 	function navigateEvidence(direction: -1 | 1) {
 		const next = evidenceImages[evidenceIndex + direction];
 		if (next) setSelectedImage(next.id);
+	}
+	function openEvidence(imageId: string, ids: string[] | null = null) {
+		setDecisionEvidenceIds(ids);
+		setSelectedImage(imageId);
+	}
+	function decisionCard(decision: ScreenshotDecision, index: number) {
+		return (
+			<article key={`${index}-${decision.title}`} className={styles.decision}>
+				<small>
+					{decision.recommendation} · {decision.confidence} evidence confidence
+				</small>
+				<h3>{decision.title}</h3>
+				<p className={styles.advicePreview}>{decision.experiment}</p>
+				<details>
+					<summary>Why, alternatives & tradeoff</summary>
+					<p>
+						<strong>Why</strong>
+						{decision.rationale}
+					</p>
+					<p>
+						<strong>Counterevidence / alternative</strong>
+						{decision.counterEvidence}
+					</p>
+					<p>
+						<strong>Experiment</strong>
+						{decision.experiment}
+					</p>
+					<p>
+						<strong>Tradeoff</strong>
+						{decision.tradeoff}
+					</p>
+				</details>
+				<button
+					type="button"
+					className={styles.evidenceLink}
+					onClick={() => openEvidence(decision.evidenceImageIds[0], decision.evidenceImageIds)}
+					aria-label={`Evidence for ${decision.title}`}
+				>
+					Inspect {decision.evidenceImageIds.length}{" "}
+					{decision.evidenceImageIds.length === 1 ? "source screen" : "source screens"}
+				</button>
+			</article>
+		);
 	}
 
 	return (
@@ -517,12 +630,25 @@ export function ScreenshotBoard({ active }: Props) {
 										: ""}
 						</span>
 					</div>
+					<label hidden={!contextExpanded} className={styles.companyDomain}>
+						Company domain (optional)
+						<input
+							aria-label="Company domain (optional)"
+							inputMode="url"
+							placeholder="company.com"
+							value={settings.companyDomain}
+							disabled={!loaded || !!busy}
+							onChange={(event) => update("companyDomain", event.target.value)}
+							onBlur={() => void saveContext()}
+						/>
+						<small>Gemini reads your public site during analysis. Screens provide the rest.</small>
+					</label>
 					<textarea
 						id="screenshot-product-context"
 						aria-label="Our product"
 						hidden={!contextExpanded}
 						rows={2}
-						placeholder="Audience, goal, and what makes our approach different"
+						placeholder="Optional: audience, decision, or constraints the screens don’t show"
 						value={settings.productBrief}
 						disabled={!loaded || !!busy}
 						onChange={(event) => update("productBrief", event.target.value)}
@@ -530,7 +656,9 @@ export function ScreenshotBoard({ active }: Props) {
 					/>
 					{!contextExpanded ? (
 						<p className={styles.contextPreview}>
-							{settings.productBrief || "Add audience, goal, and constraints for specific advice."}
+							{settings.companyDomain ||
+								settings.productBrief ||
+								"Learns from screens · add a company domain to tailor advice"}
 						</p>
 					) : null}
 					{contextError ? (
@@ -636,28 +764,79 @@ export function ScreenshotBoard({ active }: Props) {
 							</button>
 						) : null}
 					</div>
+					{batch?.companyContext ? (
+						<p className={styles.muted}>
+							{batch.companyContext.status === "retrieved" ? (
+								<>
+									Company context grounded in{" "}
+									{batch.companyContext.sourceUrls.map((url) => (
+										<a key={url} href={url} target="_blank" rel="noreferrer">
+											{new URL(url).hostname}
+										</a>
+									))}
+								</>
+							) : (
+								"Company site wasn’t retrieved. Advice uses the screens and any written context; website fit is unverified."
+							)}
+						</p>
+					) : null}
+					{analysis.understanding ? (
+						<details className={styles.understanding}>
+							<summary>
+								Working understanding · {analysis.understanding.confidence} confidence
+							</summary>
+							<dl>
+								<dt>Product</dt>
+								<dd>{analysis.understanding.product}</dd>
+								<dt>Audience</dt>
+								<dd>{analysis.understanding.audience}</dd>
+								<dt>Job to be done</dt>
+								<dd>{analysis.understanding.job}</dd>
+							</dl>
+						</details>
+					) : null}
 					<div className={styles.advice}>
-						{analysis.screens.slice(0, 3).map((screen) => (
-							<article key={screen.imageId}>
-								<button
-									type="button"
-									className={styles.evidenceLink}
-									onClick={() => setSelectedImage(screen.imageId)}
-								>
-									{screen.label}
-								</button>
-								<p className={styles.advicePreview}>{screen.advice}</p>
-								<button
-									type="button"
-									className={styles.textButton}
-									onClick={() => setSelectedImage(screen.imageId)}
-									aria-label={`Inspect ${screen.label}`}
-								>
-									Inspect evidence
-								</button>
-							</article>
-						))}
+						{analysis.decisions
+							? analysis.decisions.slice(0, showAllDecisions ? 5 : 3).map(decisionCard)
+							: analysis.screens.slice(0, 3).map((screen) => (
+									<article key={screen.imageId}>
+										<button
+											type="button"
+											className={styles.evidenceLink}
+											onClick={() => openEvidence(screen.imageId)}
+										>
+											{screen.label}
+										</button>
+										<p className={styles.advicePreview}>{screen.advice}</p>
+										<button
+											type="button"
+											className={styles.textButton}
+											onClick={() => openEvidence(screen.imageId)}
+											aria-label={`Inspect ${screen.label}`}
+										>
+											Inspect evidence
+										</button>
+									</article>
+								))}
 					</div>
+					{analysis.decisions && !analysis.decisions.length ? (
+						<p className={styles.muted}>
+							No supported product decision yet. Inspect the screens and unknowns before choosing an
+							experiment.
+						</p>
+					) : null}
+					{analysis.decisions && analysis.decisions.length > 3 ? (
+						<button
+							type="button"
+							className={styles.textButton}
+							aria-expanded={showAllDecisions}
+							onClick={() => setShowAllDecisions((shown) => !shown)}
+						>
+							{showAllDecisions
+								? "Fewer decisions"
+								: `More decisions (${analysis.decisions.length - 3})`}
+						</button>
+					) : null}
 					{analysis.unknowns.length ? (
 						<details className={styles.unknowns}>
 							<summary>What these screens don’t establish ({analysis.unknowns.length})</summary>
@@ -732,7 +911,7 @@ export function ScreenshotBoard({ active }: Props) {
 									<article key={image.id} className={styles.card}>
 										<button
 											type="button"
-											onClick={() => setSelectedImage(image.id)}
+											onClick={() => openEvidence(image.id)}
 											aria-label={`View ${screen?.label ?? image.originalName}`}
 										>
 											<img
@@ -787,6 +966,7 @@ export function ScreenshotBoard({ active }: Props) {
 							<ChevronLeft size={15} /> Previous
 						</button>
 						<span aria-live="polite">
+							{decisionEvidenceIds ? "Decision evidence · " : ""}
 							{evidenceIndex + 1} of {evidenceImages.length}
 						</span>
 						<button

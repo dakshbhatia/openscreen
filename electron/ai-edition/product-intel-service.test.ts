@@ -4,6 +4,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_INTEL_SETTINGS } from "../../src/lib/product-intel";
+import { PRODUCT_REASONING_RULES } from "../../src/lib/product-reasoning";
 import { ProductIntelService } from "./product-intel-service";
 
 const analysis = {
@@ -153,6 +154,62 @@ describe("ProductIntelService", () => {
 		expect(requests.at(-1)?.init?.method).toBe("DELETE");
 		expect(JSON.stringify(report)).not.toContain("test-key");
 	});
+	it("appends current reasoning after a saved custom prompt without rewriting settings", async () => {
+		const base = google();
+		const intel = service("test-key", base.fetcher);
+		const prompt = "My custom lens!!\nPreserve me.";
+		await intel.saveSettings({ ...DEFAULT_INTEL_SETTINGS, systemPrompt: prompt });
+		const report = await intel.analyze("proj_1");
+		const request = base.requests.find((item) => item.url.includes(":generateContent"));
+		const body = JSON.parse(String(request?.init?.body)) as {
+			systemInstruction: { parts: { text: string }[] };
+			tools?: unknown;
+		};
+		expect(body.systemInstruction.parts[0].text).toBe(`${prompt}\n\n${PRODUCT_REASONING_RULES}`);
+		expect(body.systemInstruction.parts[0].text).toContain(
+			"Successfully retrieved company content supplies product context even without a written brief",
+		);
+		expect(body.tools).toBeUndefined();
+		expect(report.settings.systemPrompt).toBe(prompt);
+		expect((await intel.getSettings()).systemPrompt).toBe(prompt);
+	});
+	it.each([
+		true,
+		false,
+	])("adds optional company URL context and uses retrieval metadata only (retrieved=%s)", async (retrieved) => {
+		const base = google();
+		const fetcher: typeof fetch = async (url, init) => {
+			const response = await base.fetcher(url, init);
+			if (!String(url).includes(":generateContent")) return response;
+			const raw = (await response.json()) as { candidates: { urlContextMetadata?: unknown }[] };
+			if (retrieved)
+				raw.candidates[0].urlContextMetadata = {
+					urlMetadata: [
+						{
+							retrievedUrl: "https://example.com/about",
+							urlRetrievalStatus: "URL_RETRIEVAL_STATUS_SUCCESS",
+						},
+					],
+				};
+			return Response.json(raw);
+		};
+		const intel = service("test-key", fetcher);
+		await intel.saveSettings({
+			...DEFAULT_INTEL_SETTINGS,
+			companyDomain: "https://example.com",
+		});
+		const report = await intel.analyze("proj_1");
+		const request = base.requests.find((item) => item.url.includes(":generateContent"));
+		const body = JSON.parse(String(request?.init?.body)) as { tools?: unknown; contents: unknown };
+		expect(body.tools).toEqual([{ urlContext: {} }]);
+		expect(JSON.stringify(body.contents)).toContain("https://example.com");
+		expect(report.companyContext?.status).toBe(retrieved ? "retrieved" : "unavailable");
+		expect(report.companyContext?.sourceUrls).toEqual(
+			retrieved ? ["https://example.com/about"] : [],
+		);
+		expect((await intel.getReport("proj_1"))?.companyContext).toEqual(report.companyContext);
+	});
+
 	it.each([
 		401, 403, 429, 404, 400, 503, 418,
 	])("returns safe HTTP %s recovery guidance and still deletes video uploads", async (status) => {

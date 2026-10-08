@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_INTEL_SETTINGS, type IntelReport } from "@/lib/product-intel";
+import { normalizeCompanyDomain } from "@/lib/company-context";
+import { DEFAULT_INTEL_SETTINGS, type IntelReport, type IntelSettings } from "@/lib/product-intel";
 import { nativeBridgeClient } from "@/native/client";
 import { ProductIntelPanel } from "./ProductIntelPanel";
 
@@ -59,7 +60,220 @@ function panel(fresh = false) {
 	);
 }
 
+function deferred<T>() {
+	let complete: ((value: T) => void) | undefined;
+	const promise = new Promise<T>((resolve) => {
+		complete = resolve;
+	});
+	return {
+		promise,
+		resolve(value: T) {
+			complete?.(value);
+		},
+	};
+}
+
 describe("ProductIntelPanel", () => {
+	it("does not overwrite newer brief edits when an older domain blur save completes", async () => {
+		const save = deferred<IntelSettings>();
+		vi.mocked(nativeBridgeClient.productIntel.saveSettings).mockReturnValueOnce(save.promise);
+		panel();
+		await waitFor(() => expect(screen.getByLabelText("Our product")).toBeEnabled());
+		fireEvent.click(screen.getByText("Research settings", { selector: "summary" }));
+		fireEvent.change(screen.getByLabelText("Company domain (optional)"), {
+			target: { value: "example.com" },
+		});
+		fireEvent.blur(screen.getByLabelText("Company domain (optional)"));
+		const newerBrief = "My newer words!\n  Preserve this spacing.";
+		fireEvent.change(screen.getByLabelText("Our product"), { target: { value: newerBrief } });
+		await act(async () =>
+			save.resolve({ ...DEFAULT_INTEL_SETTINGS, companyDomain: "https://example.com" }),
+		);
+		expect(screen.getByLabelText("Our product")).toHaveValue(newerBrief);
+		fireEvent.blur(screen.getByLabelText("Our product"));
+		await waitFor(() =>
+			expect(nativeBridgeClient.productIntel.saveSettings).toHaveBeenLastCalledWith(
+				expect.objectContaining({ productBrief: newerBrief }),
+			),
+		);
+	});
+	it("does not load an old snapshot that began while local settings were saving", async () => {
+		const save = deferred<IntelSettings>();
+		const snapshot =
+			deferred<Awaited<ReturnType<typeof nativeBridgeClient.productIntel.snapshot>>>();
+		vi.mocked(nativeBridgeClient.productIntel.saveSettings).mockReturnValueOnce(save.promise);
+		vi.mocked(nativeBridgeClient.productIntel.snapshot)
+			.mockResolvedValueOnce({
+				settings: DEFAULT_INTEL_SETTINGS,
+				report: null,
+				connected: true,
+				status: null,
+			})
+			.mockReturnValueOnce(snapshot.promise);
+		const view = panel();
+		await waitFor(() => expect(screen.getByLabelText("Our product")).toBeEnabled());
+		fireEvent.change(screen.getByLabelText("Our product"), {
+			target: { value: "Keep my local brief" },
+		});
+		fireEvent.change(screen.getByLabelText("Company domain (optional)"), {
+			target: { value: "example.com" },
+		});
+		fireEvent.blur(screen.getByLabelText("Company domain (optional)"));
+		const props = {
+			onOpenChange: vi.fn(),
+			projectId: "proj_1",
+			source,
+			freshRecordingProjectId: null,
+		};
+		view.rerender(<ProductIntelPanel {...props} open={false} />);
+		view.rerender(<ProductIntelPanel {...props} open />);
+		await waitFor(() => expect(nativeBridgeClient.productIntel.snapshot).toHaveBeenCalledTimes(2));
+		await act(async () =>
+			save.resolve({
+				...DEFAULT_INTEL_SETTINGS,
+				productBrief: "Keep my local brief",
+				companyDomain: "https://example.com",
+			}),
+		);
+		await act(async () =>
+			snapshot.resolve({
+				settings: DEFAULT_INTEL_SETTINGS,
+				report: null,
+				connected: true,
+				status: null,
+			}),
+		);
+		expect(screen.getByLabelText("Our product")).toHaveValue("Keep my local brief");
+		expect(screen.getByLabelText("Company domain (optional)")).toHaveValue("https://example.com");
+	});
+	it("ignores a save completion from the previously open project", async () => {
+		const save = deferred<IntelSettings>();
+		const nextSettings = {
+			...DEFAULT_INTEL_SETTINGS,
+			productBrief: "Second project words",
+			companyDomain: "https://other.com",
+		};
+		vi.mocked(nativeBridgeClient.productIntel.saveSettings).mockReturnValueOnce(save.promise);
+		vi.mocked(nativeBridgeClient.productIntel.snapshot)
+			.mockResolvedValueOnce({
+				settings: DEFAULT_INTEL_SETTINGS,
+				report: null,
+				connected: true,
+				status: null,
+			})
+			.mockResolvedValueOnce({
+				settings: nextSettings,
+				report: null,
+				connected: true,
+				status: null,
+			});
+		const view = panel();
+		await waitFor(() => expect(screen.getByLabelText("Our product")).toBeEnabled());
+		fireEvent.change(screen.getByLabelText("Company domain (optional)"), {
+			target: { value: "example.com" },
+		});
+		fireEvent.blur(screen.getByLabelText("Company domain (optional)"));
+		view.rerender(
+			<ProductIntelPanel
+				open
+				onOpenChange={vi.fn()}
+				projectId="proj_2"
+				source={{ ...source, assetId: "asset_2" }}
+				freshRecordingProjectId={null}
+			/>,
+		);
+		await waitFor(() =>
+			expect(screen.getByLabelText("Our product")).toHaveValue("Second project words"),
+		);
+		await act(async () =>
+			save.resolve({ ...DEFAULT_INTEL_SETTINGS, companyDomain: "https://example.com" }),
+		);
+		expect(screen.getByLabelText("Our product")).toHaveValue("Second project words");
+		expect(screen.getByLabelText("Company domain (optional)")).toHaveValue("https://other.com");
+	});
+	it("preserves explicit checkbox next-values across a delayed save", async () => {
+		const save = deferred<IntelSettings>();
+		vi.mocked(nativeBridgeClient.productIntel.saveSettings).mockReturnValueOnce(save.promise);
+		panel(true);
+		await waitFor(() => expect(screen.getByLabelText("Our product")).toBeEnabled());
+		fireEvent.click(screen.getByText("Research settings", { selector: "summary" }));
+		fireEvent.click(screen.getByRole("checkbox"));
+		expect(nativeBridgeClient.productIntel.saveSettings).toHaveBeenCalledWith(
+			expect.objectContaining({ autoAnalyze: true }),
+		);
+		expect(screen.getByRole("checkbox")).toBeChecked();
+		expect(nativeBridgeClient.productIntel.analyze).not.toHaveBeenCalled();
+		await act(async () => save.resolve({ ...DEFAULT_INTEL_SETTINGS, autoAnalyze: true }));
+		expect(screen.getByRole("checkbox")).toBeChecked();
+		await waitFor(() => expect(nativeBridgeClient.productIntel.analyze).toHaveBeenCalledTimes(1));
+	});
+	it("keeps optional company domain inside Research settings and preserves the brief", async () => {
+		const brief = "My quirky brief!\n  Keep these spaces.";
+		vi.mocked(nativeBridgeClient.productIntel.snapshot).mockResolvedValue({
+			settings: { ...DEFAULT_INTEL_SETTINGS, productBrief: brief },
+			report: null,
+			connected: true,
+			status: null,
+		});
+		vi.mocked(nativeBridgeClient.productIntel.saveSettings).mockImplementation(
+			async (settings) => ({
+				...settings,
+				companyDomain: normalizeCompanyDomain(settings.companyDomain),
+			}),
+		);
+		panel();
+		await waitFor(() => expect(screen.getByLabelText("Our product")).toHaveValue(brief));
+		expect(screen.getByLabelText("Company domain (optional)")).not.toBeVisible();
+		fireEvent.click(screen.getByText("Research settings", { selector: "summary" }));
+		const domain = screen.getByLabelText("Company domain (optional)");
+		expect(domain).toBeVisible();
+		fireEvent.change(domain, { target: { value: "example.com/about" } });
+		fireEvent.blur(domain);
+		await waitFor(() => expect(domain).toHaveValue("https://example.com"));
+		expect(nativeBridgeClient.productIntel.saveSettings).toHaveBeenCalledWith(
+			expect.objectContaining({ companyDomain: "example.com/about", productBrief: brief }),
+		);
+		expect(screen.getByLabelText("Our product")).toHaveValue(brief);
+	});
+	it("marks domain changes stale and renders only verified company sources", async () => {
+		const settings = { ...DEFAULT_INTEL_SETTINGS, companyDomain: "https://example.com" };
+		vi.mocked(nativeBridgeClient.productIntel.snapshot).mockResolvedValue({
+			settings,
+			report: {
+				...report,
+				settings,
+				companyContext: {
+					domain: "https://example.com",
+					status: "retrieved",
+					sourceUrls: ["https://www.example.com/about"],
+				},
+			},
+			connected: true,
+			status: null,
+		});
+		panel();
+		const sourceLink = await screen.findByRole("link", { name: "www.example.com" });
+		expect(sourceLink).toHaveAttribute("href", "https://www.example.com/about");
+		expect(screen.getByText(/Company website retrieved/)).toBeVisible();
+		expect(screen.queryByRole("note")).not.toBeInTheDocument();
+		fireEvent.change(screen.getByLabelText("Company domain (optional)"), {
+			target: { value: "https://other.com" },
+		});
+		expect(screen.getByRole("note")).toHaveTextContent("Context changed");
+	});
+	it("shows unavailable website context when an older report has a domain without retrieval metadata", async () => {
+		const settings = { ...DEFAULT_INTEL_SETTINGS, companyDomain: "https://example.com" };
+		vi.mocked(nativeBridgeClient.productIntel.snapshot).mockResolvedValue({
+			settings,
+			report: { ...report, settings },
+			connected: true,
+			status: null,
+		});
+		panel();
+		expect(await screen.findByText(/Company website unavailable/)).toBeVisible();
+		expect(screen.queryByText(/Company website retrieved/)).not.toBeInTheDocument();
+		expect(screen.queryByRole("link", { name: "example.com" })).not.toBeInTheDocument();
+	});
 	it("lets the user supply context and displays timestamped evidence", async () => {
 		panel();
 		await screen.findByLabelText("Our product");
@@ -328,5 +542,55 @@ describe("ProductIntelPanel", () => {
 		expect(click.mock.instances[0]).toHaveAttribute("download", "product-flow-proj_1.md");
 		click.mockRestore();
 		vi.unstubAllGlobals();
+	});
+	it("exports allowlisted JSON with company domain and provider retrieval metadata", async () => {
+		const settings = {
+			...DEFAULT_INTEL_SETTINGS,
+			companyDomain: "https://example.com",
+			productBrief: "My exact brief!\n  Keep this spacing.",
+		};
+		vi.mocked(nativeBridgeClient.productIntel.snapshot).mockResolvedValue({
+			settings,
+			report: {
+				...report,
+				settings,
+				companyContext: {
+					domain: "https://example.com",
+					status: "retrieved",
+					sourceUrls: ["https://example.com/about"],
+				},
+			},
+			connected: true,
+			status: null,
+		});
+		const blobs: Blob[] = [];
+		vi.stubGlobal(
+			"URL",
+			class extends URL {
+				static createObjectURL = vi.fn((blob: Blob) => {
+					blobs.push(blob);
+					return "blob:test-json";
+				});
+				static revokeObjectURL = vi.fn();
+			},
+		);
+		vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+			/* Prevent jsdom navigation. */
+		});
+		panel();
+		fireEvent.click(await screen.findByRole("button", { name: "JSON" }));
+		expect(blobs[0].type).toBe("application/json");
+		const content = await new Promise<string>((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(String(reader.result));
+			reader.onerror = () => reject(reader.error);
+			reader.readAsText(blobs[0]);
+		});
+		expect(content).toContain('"companyDomain": "https://example.com"');
+		expect(content).toContain('"status": "retrieved"');
+		expect(content).toContain("https://example.com/about");
+		expect(JSON.parse(content).context.productBrief).toBe(settings.productBrief);
+		expect(content).not.toContain("systemPrompt");
+		expect(content).not.toContain("/tmp/flow.mp4");
 	});
 });

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
 	buildProductPrompt,
 	DEFAULT_INTEL_SETTINGS,
+	intelReportSchema,
+	intelSettingsSchema,
 	PRODUCT_ANALYST_PROMPT,
 	parseProductAnalysis,
 } from "./product-intel";
@@ -23,6 +25,63 @@ const valid = {
 };
 
 describe("product intelligence evidence", () => {
+	it("defaults the optional company domain for old settings without rewriting the brief or custom prompt", () => {
+		const old = { productBrief: "My quirky brief!", systemPrompt: "Keep my custom lens." };
+		const parsed = intelSettingsSchema.parse(old);
+		expect(parsed.companyDomain).toBe("");
+		expect(parsed.productBrief).toBe(old.productBrief);
+		expect(parsed.systemPrompt).toBe(old.systemPrompt);
+		expect(
+			intelSettingsSchema.parse({ ...old, companyDomain: "example.com/about" }).companyDomain,
+		).toBe("https://example.com");
+		expect(() =>
+			intelSettingsSchema.parse({ ...old, companyDomain: "http://localhost" }),
+		).toThrow();
+	});
+	it("includes the optional domain as research data without claiming the website was visited", () => {
+		const prompt = buildProductPrompt({
+			...DEFAULT_INTEL_SETTINGS,
+			companyDomain: "https://example.com",
+		});
+		expect(prompt).toContain('"companyDomain":"https://example.com"');
+		expect(prompt).toContain("confirmed by URL tool retrieval");
+		expect(prompt).toContain("does not establish that the website was visited");
+	});
+	it("keeps old reports compatible and accepts optional validated provider context", () => {
+		const old = {
+			projectId: "proj_1",
+			assetId: "asset_1",
+			createdAt: "2026-10-08T14:00:00Z",
+			sourceFingerprint: "abc",
+			durationSec: 10,
+			settings: {},
+			analysis: valid,
+			remoteFileDeleted: true,
+		};
+		const parsed = intelReportSchema.parse(old);
+		expect(parsed.settings.companyDomain).toBe("");
+		expect(parsed).not.toHaveProperty("companyContext");
+		expect(
+			intelReportSchema.parse({
+				...old,
+				companyContext: {
+					domain: "https://example.com",
+					status: "retrieved",
+					sourceUrls: ["https://example.com/"],
+				},
+			}).companyContext?.status,
+		).toBe("retrieved");
+		expect(() =>
+			intelReportSchema.parse({
+				...old,
+				companyContext: {
+					domain: "https://example.com",
+					status: "retrieved",
+					sourceUrls: ["https://other.com/"],
+				},
+			}),
+		).toThrow();
+	});
 	it("carries the user's product brief and task verbatim into the analysis", () => {
 		const prompt = buildProductPrompt({
 			...DEFAULT_INTEL_SETTINGS,

@@ -1,8 +1,8 @@
 # Product intelligence
 
-This branch turns competitor screenshots or an OpenScreen recording into contextual product research. Describe your product, connect Gemini once, then drop screenshots to analyze and organize automatically. Screenshot reports propose names and groups, explain visible evidence, and suggest product experiments. Recording reports add source timestamps. The main findings are ordered by relevance to the supplied product brief.
+This branch turns competitor screenshots or an OpenScreen recording into contextual product research. Connect Gemini once, then drop screenshots to analyze and organize automatically. The app infers the visible competitor product and job; a company domain or written brief is optional. Screenshot reports propose names and groups, explain visible evidence, and suggest product experiments. Recording reports add source timestamps. The main findings are ordered by relevance to supplied company context and the strongest evidence.
 
-This is a personal local Mac build. Live Gemini 3.8 Flash analysis passed for a six-image batch and a synthetic two-second video. Screenshot naming, grouping and organized copies were verified in the packaged app, including connection persistence after restart. The video service returned source timestamps and confirmed remote-file deletion. Real screen capture, audio/camera and long-recording analysis still need a device-level pass. This branch does not provide a competitor library or comparisons across saved competitors.
+This is a personal local Mac build. Live Gemini 3.8 Flash analysis passed for a six-image batch and a synthetic two-second video. The new structured screenshot analysis also passed with an empty written brief and provider-confirmed retrieval of an optional public company domain. Screenshot naming, grouping and organized copies were verified in the packaged app, including connection persistence after restart. The video service returned source timestamps and confirmed remote-file deletion. Real screen capture, audio/camera and long-recording analysis still need a device-level pass. This branch does not provide a competitor library or comparisons across saved competitors.
 
 ## Ten foundational changes
 
@@ -22,7 +22,7 @@ This is a personal local Mac build. Live Gemini 3.8 Flash analysis passed for a 
 The next ten changes make the existing research workspace easier to use:
 
 1. Product context autosaves after editing, with saving/saved feedback and retry on disk errors.
-2. A populated product brief opens compactly; Edit reveals the exact original wording.
+2. Product context opens compactly; Edit reveals the optional company domain and exact brief wording.
 3. Summaries and advice use short previews; full text remains available in the summary and evidence inspector.
 4. Search matches screen names, original filenames, observations, hypotheses and advice locally.
 5. Group filters combine with search and can be cleared together.
@@ -47,7 +47,15 @@ The build produces a local app bundle under `release/2.0.0/`. The command uses `
 
 The fork uses its own `product-intel` application data directory, separate from an existing OpenScreen installation. Keys are saved with Electron OS encryption, never as plaintext. For a one-time local provisioning run, an administrator can set `PRODUCT_INTEL_SAVE_GEMINI_KEY=1` and a supported Google key environment variable when launching the app executable. This preserves an existing stored key, clears the bootstrap environment before provider initialization, and refuses storage if OS encryption is unavailable. Keep credentials out of shell arguments and source files. Normal launches use the encrypted saved key.
 
-The app opens directly into a minimal research workspace. **Screenshots** is the default input; **Recording** retains the screen recorder and video import. Add your audience, job to be done, constraints, and differentiators under **Our product**, then drop a new screenshot batch. Connected imports analyze and organize automatically; restored or selected history batches do not re-upload. Analyze reruns a batch after context changes. Gemini connection setup stays under **More**, or **Research settings** in recordings; Analyze reveals it when a key is missing. Additional context, model/custom prompts, history, and the full editor remain available under **More**.
+## Smarter analysis
+
+New screenshot reports infer a working understanding of the competitor product, likely job, audience where supported, and confidence. Screens remain an unordered collection. The app synthesizes related evidence into up to five decisions: adopt, adapt, avoid, or investigate. Each decision includes source screens, rationale, counterevidence, a small experiment, and a tradeoff. Thin evidence can produce no decision. The first three decisions appear up front; deeper reasoning stays collapsed. Inspect source screens to browse only the evidence cited by that decision.
+
+A company domain under **Our product → Edit** is optional. Gemini URL Context retrieves the public homepage during analysis to ground advice in your company. Retrieval status and source links come from Google's response metadata, not model prose. Failed or unconfirmed retrieval is shown explicitly; without supplied company context, recommendations remain investigations. The inferred competitor understanding never silently becomes your company brief. Written context and saved custom prompts retain their exact wording; application reasoning rules accompany them on requests.
+
+Search includes decision reasoning through its cited screens. Portable JSON and Markdown include working understanding, decisions, evidence IDs and verified company sources, while excluding private prompts and local paths. Existing reports remain readable and are only updated when you explicitly analyze them again.
+
+The app opens directly into a minimal research workspace. **Screenshots** is the default input; **Recording** retains the screen recorder and video import. Drop a new screenshot batch immediately. Optionally add your company domain, audience, job to be done, constraints, and differentiators under **Our product → Edit**. Connected imports analyze and organize automatically; restored or selected history batches do not re-upload. Analyze reruns a batch after context changes. Gemini connection setup stays under **More**, or **Research settings** in recordings; Analyze reveals it when a key is missing. Additional context, model/custom prompts, history, and the full editor remain available under **More**.
 
 Screenshot batches accept up to 24 PNG/JPEG/WebP images, 8 MB each and 24 MB combined. The app copies them into its local library and sends resized images to Gemini vision. It validates that every supplied image is described exactly once. Names and semantic groups apply to organized copies, preserving your original files. Unordered images do not establish click order, transitions, or task completion. Use **Open organized folder** after analysis to find the grouped, named copies.
 
@@ -71,5 +79,6 @@ npx vitest --run src/lib/screenshot-intel.test.ts electron/ai-edition/screenshot
 
 - [Google video understanding documentation](https://ai.google.dev/gemini-api/docs/video-understanding)
 - [Google image understanding documentation](https://ai.google.dev/gemini-api/docs/image-understanding)
+- [Google URL Context documentation](https://ai.google.dev/gemini-api/docs/generate-content/url-context)
 - [Google generateContent API reference](https://ai.google.dev/api/generate-content)
 - [Upstream OpenScreen repository, MIT license](https://github.com/getopenscreen/openscreen)

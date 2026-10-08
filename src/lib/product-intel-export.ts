@@ -1,4 +1,65 @@
+import { type CompanyContext, companyContextSchema, companyDomainSchema } from "./company-context";
 import type { IntelReport } from "./product-intel";
+
+/** Keep unverified, missing or unrelated website metadata from becoming a retrieval claim. */
+export function getReportCompanyContext(report: IntelReport): CompanyContext | undefined {
+	const domain = companyDomainSchema.safeParse(report.settings.companyDomain ?? "");
+	if (!domain.success || !domain.data) return undefined;
+	const unavailable: CompanyContext = {
+		domain: domain.data,
+		status: "unavailable",
+		sourceUrls: [],
+	};
+	const context = companyContextSchema.safeParse(report.companyContext);
+	if (!context.success || !context.data.domain) return unavailable;
+	const host = (url: string) => new URL(url).hostname.replace(/^www\./, "");
+	if (host(context.data.domain) !== host(domain.data)) return unavailable;
+	return {
+		domain: domain.data,
+		status: context.data.status,
+		sourceUrls: [...context.data.sourceUrls],
+	};
+}
+
+/** A shareable field allowlist, with the supplied product brief preserved verbatim. */
+export function reportToExportData(report: IntelReport) {
+	const companyContext = getReportCompanyContext(report);
+	return {
+		projectId: report.projectId,
+		assetId: report.assetId,
+		createdAt: report.createdAt,
+		durationSec: report.durationSec,
+		sourceFingerprint: report.sourceFingerprint,
+		remoteFileDeleted: report.remoteFileDeleted,
+		context: {
+			companyDomain: companyContext?.domain ?? "",
+			productBrief: report.settings.productBrief,
+			competitor: report.settings.competitor,
+			task: report.settings.task,
+			model: report.settings.model,
+		},
+		...(companyContext ? { companyContext } : {}),
+		analysis: {
+			summary: report.analysis.summary,
+			steps: report.analysis.steps.map(({ timeSec, action, evidence }) => ({
+				timeSec,
+				action,
+				evidence,
+			})),
+			findings: report.analysis.findings.map(
+				({ timeSec, category, observation, hypothesis, implication, confidence }) => ({
+					timeSec,
+					category,
+					observation,
+					hypothesis,
+					implication,
+					confidence,
+				}),
+			),
+			unknowns: [...report.analysis.unknowns],
+		},
+	};
+}
 
 // Export an explicit allowlist rather than serializing settings or the report.
 // Redactions are visible, and only cover unmistakable secrets/local paths.
@@ -26,10 +87,19 @@ function timestamp(seconds: number): string {
 /** A comparison-ready report whose timestamps always refer to the raw source. */
 export function reportToMarkdown(report: IntelReport): string {
 	const { analysis, settings } = report;
+	const companyContext = getReportCompanyContext(report);
 	const sections = [
 		"# Product intelligence report",
 		"## Context",
-		`### Product brief\n\n${quote(settings.productBrief || "Not supplied; relevance is provisional.")}`,
+		`### Company domain\n\n${quote(companyContext?.domain || "Not supplied")}`,
+		`### Company website retrieval\n\n${
+			companyContext?.status === "retrieved"
+				? `Retrieved; confirmed by provider URL tool metadata.\n\n${companyContext.sourceUrls.map((url) => `- ${text(url)}`).join("\n")}`
+				: companyContext
+					? "Unavailable; company website retrieval was not confirmed. Company fit remains provisional."
+					: "No company domain supplied; company website retrieval was not requested."
+		}`,
+		`### Product brief\n\n${quote(settings.productBrief || (companyContext?.status === "retrieved" ? "Not supplied; company website supplies product context." : "Not supplied; relevance is provisional."))}`,
 		`### Competitor\n\n${quote(settings.competitor || "Not labelled")}`,
 		`### Task\n\n${quote(settings.task || "Not supplied; any inferred task needs validation.")}`,
 		"## Report metadata",

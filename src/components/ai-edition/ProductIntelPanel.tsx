@@ -8,7 +8,11 @@ import {
 	type IntelSettings,
 	PRODUCT_ANALYST_PROMPT,
 } from "@/lib/product-intel";
-import { reportToMarkdown } from "@/lib/product-intel-export";
+import {
+	getReportCompanyContext,
+	reportToExportData,
+	reportToMarkdown,
+} from "@/lib/product-intel-export";
 import { nativeBridgeClient } from "@/native/client";
 import styles from "./ProductIntelPanel.module.css";
 
@@ -65,16 +69,35 @@ export function ProductIntelPanel({
 	const researchSettings = useRef<HTMLDetailsElement>(null);
 	const keyInput = useRef<HTMLInputElement>(null);
 	const currentProject = useRef(projectId);
+	const settingsVersion = useRef(0);
+	const settingsDirty = useRef(false);
 
 	const autoStarted = useRef<string | null>(null);
 	const active = useRef(false);
 	const requestVersion = useRef(0);
+
+	// Project changes invalidate old saves as well as old analysis completions.
+	useEffect(() => {
+		if (currentProject.current !== projectId) {
+			settingsVersion.current++;
+			settingsDirty.current = false;
+			setSaved(false);
+		}
+		currentProject.current = projectId;
+		requestVersion.current++;
+		active.current = false;
+		setBusy(false);
+		setStatus("");
+		setBackendPending(null);
+	}, [projectId]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: loadAttempt explicitly retries failed snapshot loading.
 	useEffect(() => {
 		if (active.current && currentProject.current === projectId) return;
 		if (!open && (!projectId || freshRecordingProjectId !== projectId)) return;
 		let stale = false;
+		const loadVersion = settingsVersion.current;
+		const canLoadSettings = !settingsDirty.current;
 		setLoaded(false);
 		setReport(null);
 		setError("");
@@ -83,7 +106,9 @@ export function ProductIntelPanel({
 			.snapshot(projectId ?? undefined)
 			.then((snapshot) => {
 				if (stale) return;
-				setSettings(snapshot.settings);
+				if (canLoadSettings && !settingsDirty.current && loadVersion === settingsVersion.current) {
+					setSettings(snapshot.settings);
+				}
 				setConnected(snapshot.connected);
 				setReport(snapshot.report);
 				if (snapshot.status && projectId) {
@@ -101,17 +126,6 @@ export function ProductIntelPanel({
 			stale = true;
 		};
 	}, [open, projectId, freshRecordingProjectId, loadAttempt]);
-
-	// Long uploads continue when the panel closes. A project change must not let an
-	// old completion replace the next project's report or trigger its auto-analysis.
-	useEffect(() => {
-		currentProject.current = projectId;
-		requestVersion.current++;
-		active.current = false;
-		setBusy(false);
-		setStatus("");
-		setBackendPending(null);
-	}, [projectId]);
 
 	// Reattach to an upload started before this panel mounted or this project reopened.
 	useEffect(() => {
@@ -143,6 +157,29 @@ export function ProductIntelPanel({
 		};
 	}, [backendPending, projectId]);
 
+	const persistSettings = useCallback(async (next: IntelSettings, originProject: string | null) => {
+		const version = ++settingsVersion.current;
+		settingsDirty.current = true;
+		setSettings(next);
+		setError("");
+		setSaved(false);
+		try {
+			const savedSettings = await nativeBridgeClient.productIntel.saveSettings(next);
+			if (version !== settingsVersion.current || currentProject.current !== originProject)
+				return false;
+			// Only normalization comes back into local text; newer edits have their own revision.
+			setSettings((previous) => ({ ...previous, companyDomain: savedSettings.companyDomain }));
+			settingsDirty.current = false;
+			setSaved(true);
+			return true;
+		} catch (err) {
+			if (version === settingsVersion.current && currentProject.current === originProject) {
+				setError(message(err));
+			}
+			return false;
+		}
+	}, []);
+
 	const analyze = useCallback(
 		async (automatic = false) => {
 			if (!projectId || !source || active.current || !connected) return;
@@ -164,7 +201,10 @@ export function ProductIntelPanel({
 					});
 			}, 2500);
 			try {
-				if (!automatic) await nativeBridgeClient.productIntel.saveSettings(settings);
+				if (!automatic) {
+					if (!(await persistSettings(settings, projectId))) return;
+				}
+				if (version !== requestVersion.current || currentProject.current !== projectId) return;
 				const result = await nativeBridgeClient.productIntel.analyze(projectId, automatic);
 				if (version === requestVersion.current && currentProject.current === projectId) {
 					setReport(result);
@@ -181,12 +221,13 @@ export function ProductIntelPanel({
 				}
 			}
 		},
-		[projectId, source, connected, settings, onOpenChange],
+		[projectId, source, connected, settings, onOpenChange, persistSettings],
 	);
 
 	useEffect(() => {
 		if (
 			!loaded ||
+			settingsDirty.current ||
 			!settings.autoAnalyze ||
 			!connected ||
 			!source ||
@@ -209,15 +250,7 @@ export function ProductIntelPanel({
 	]);
 
 	async function saveSettings(next = settings) {
-		setError("");
-		setSaved(false);
-		try {
-			const savedSettings = await nativeBridgeClient.productIntel.saveSettings(next);
-			setSettings(savedSettings);
-			setSaved(true);
-		} catch (err) {
-			setError(message(err));
-		}
+		await persistSettings(next, projectId);
 	}
 	async function connect() {
 		if (!key.trim()) return;
@@ -250,25 +283,7 @@ export function ProductIntelPanel({
 				[
 					markdown
 						? reportToMarkdown(visibleReport)
-						: JSON.stringify(
-								{
-									projectId: visibleReport.projectId,
-									assetId: visibleReport.assetId,
-									createdAt: visibleReport.createdAt,
-									durationSec: visibleReport.durationSec,
-									sourceFingerprint: visibleReport.sourceFingerprint,
-									remoteFileDeleted: visibleReport.remoteFileDeleted,
-									context: {
-										productBrief: visibleReport.settings.productBrief,
-										competitor: visibleReport.settings.competitor,
-										task: visibleReport.settings.task,
-										model: visibleReport.settings.model,
-									},
-									analysis: visibleReport.analysis,
-								},
-								null,
-								2,
-							),
+						: JSON.stringify(reportToExportData(visibleReport), null, 2),
 				],
 				{
 					type: markdown ? "text/markdown;charset=utf-8" : "application/json",
@@ -282,15 +297,19 @@ export function ProductIntelPanel({
 		setTimeout(() => URL.revokeObjectURL(url), 1000);
 	}
 	const update = <K extends keyof IntelSettings>(field: K, value: IntelSettings[K]) => {
+		settingsDirty.current = true;
+		settingsVersion.current++;
 		setSettings((previous) => ({ ...previous, [field]: value }));
 		setSaved(false);
 	};
 	const visibleReport =
 		report?.projectId === projectId && report.assetId === source?.assetId ? report : null;
+	const companyContext = visibleReport ? getReportCompanyContext(visibleReport) : undefined;
 
 	const contextChanged =
 		visibleReport !== null &&
-		(visibleReport.settings.productBrief !== settings.productBrief ||
+		((visibleReport.settings.companyDomain ?? "") !== (settings.companyDomain ?? "") ||
+			visibleReport.settings.productBrief !== settings.productBrief ||
 			visibleReport.settings.competitor !== settings.competitor ||
 			visibleReport.settings.task !== settings.task ||
 			visibleReport.settings.model !== settings.model ||
@@ -403,6 +422,19 @@ export function ProductIntelPanel({
 					<details className={styles.advanced} ref={researchSettings}>
 						<summary>Research settings</summary>
 						{keySetup}
+						<label>
+							Company domain (optional)
+							<input
+								aria-label="Company domain (optional)"
+								inputMode="url"
+								value={settings.companyDomain ?? ""}
+								placeholder="company.com"
+								onChange={(e) => update("companyDomain", e.target.value)}
+								onBlur={() => void saveSettings()}
+								disabled={!loaded || busy}
+							/>
+							<small>Gemini can read your public site during analysis to tailor the advice.</small>
+						</label>
 						<div className={styles.pair}>
 							<label>
 								Competitor
@@ -590,6 +622,25 @@ export function ProductIntelPanel({
 								{new Date(visibleReport.createdAt).toLocaleDateString()} ·{" "}
 								{visibleReport.settings.model}
 							</p>
+							{companyContext ? (
+								<p className={styles.fineprint}>
+									{companyContext.status === "retrieved" ? (
+										<>
+											Company website retrieved:{" "}
+											{companyContext.sourceUrls.map((url, index) => (
+												<span key={url}>
+													{index ? ", " : ""}
+													<a href={url} target="_blank" rel="noreferrer">
+														{new URL(url).hostname}
+													</a>
+												</span>
+											))}
+										</>
+									) : (
+										"Company website unavailable; retrieval was not confirmed. Company fit remains provisional."
+									)}
+								</p>
+							) : null}
 							{visibleReport.analysis.findings.slice(0, 3).map(renderFinding)}
 							{visibleReport.analysis.findings.length > 3 ? (
 								<details className={styles.more}>

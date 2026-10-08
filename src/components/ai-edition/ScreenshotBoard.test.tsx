@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_INTEL_SETTINGS } from "@/lib/product-intel";
 import type { ScreenshotBatch } from "@/lib/screenshot-intel";
@@ -95,7 +95,8 @@ async function loadExistingBatch() {
 describe("ScreenshotBoard", () => {
 	it("keeps settings and history hidden while the primary import and analyze actions stay visible", async () => {
 		await loadExistingBatch();
-		expect(screen.getByLabelText("Our product")).toBeVisible();
+		expect(screen.getByLabelText("Our product")).not.toBeVisible();
+		expect(screen.getByLabelText("Company domain (optional)")).not.toBeVisible();
 		expect(screen.getByRole("button", { name: "Analyze screenshots" })).toBeEnabled();
 		expect(screen.getByLabelText("Model")).not.toBeVisible();
 		expect(screen.getByLabelText("Recent research")).not.toBeVisible();
@@ -104,6 +105,7 @@ describe("ScreenshotBoard", () => {
 	});
 	it("saves exact product context and shows grouped AI names, three advices and enlarged evidence", async () => {
 		await loadExistingBatch();
+		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
 		fireEvent.change(screen.getByLabelText("Our product"), {
 			target: { value: "Our quirky product words." },
 		});
@@ -183,6 +185,7 @@ describe("ScreenshotBoard", () => {
 		render(<ScreenshotBoard active />);
 		await screen.findByText("Setup uses focused choices.");
 		expect(screen.queryByRole("note")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
 		fireEvent.change(screen.getByLabelText("Our product"), { target: { value: "New context" } });
 		expect(screen.getByRole("note")).toHaveTextContent("Context changed");
 	});
@@ -241,6 +244,7 @@ describe("ScreenshotBoard", () => {
 		await waitFor(() =>
 			expect(screen.getByRole("button", { name: "Add screenshots" })).toBeEnabled(),
 		);
+		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
 		fireEvent.change(screen.getByLabelText("Our product"), {
 			target: { value: "Our exact current context" },
 		});
@@ -294,6 +298,7 @@ describe("ScreenshotBoard", () => {
 		vi.mocked(nativeBridgeClient.productIntel.saveSettings).mockRejectedValueOnce(
 			new Error("Disk unavailable"),
 		);
+		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
 		fireEvent.change(screen.getByLabelText("Our product"), {
 			target: { value: "Our words, untouched!!" },
 		});
@@ -406,4 +411,182 @@ describe("ScreenshotBoard", () => {
 		).toBeInTheDocument();
 		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
 	});
+});
+
+const intelligent: ScreenshotBatch = {
+	...analyzed,
+	companyContext: {
+		domain: "https://example.com",
+		status: "retrieved",
+		sourceUrls: ["https://example.com/"],
+	},
+	analysis: {
+		...analyzed.analysis!,
+		understanding: {
+			product: "A focused workspace",
+			audience: "Small teams (inferred)",
+			job: "Coordinate work",
+			confidence: "medium",
+		},
+		decisions: [
+			{
+				title: "Test progressive setup",
+				recommendation: "adapt",
+				rationale: "Two screens expose focused choices",
+				counterEvidence: "Existing users might prefer a dense form",
+				experiment: "Compare completion errors with fewer fields",
+				tradeoff: "Extra steps may slow experienced users",
+				confidence: "medium",
+				evidenceImageIds: [batch.images[3].id, batch.images[1].id],
+			},
+		],
+	},
+};
+describe("collection intelligence", () => {
+	it("shows cross-screen decisions with optional reasoning and only their cited evidence", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([intelligent]);
+		render(<ScreenshotBoard active />);
+		await screen.findByText("Test progressive setup");
+		const advice = screen.getByRole("region", { name: "Product advice" });
+		expect(within(advice).queryByText("Advice 1")).not.toBeInTheDocument();
+		expect(screen.getByText("Existing users might prefer a dense form")).not.toBeVisible();
+		fireEvent.click(screen.getByText("Why, alternatives & tradeoff", { selector: "summary" }));
+		expect(screen.getByText("Existing users might prefer a dense form")).toBeVisible();
+		expect(screen.getByText("Extra steps may slow experienced users")).toBeVisible();
+		fireEvent.click(screen.getByRole("button", { name: "Evidence for Test progressive setup" }));
+		const dialog = screen.getByRole("dialog");
+		expect(within(dialog).getByRole("img", { name: "AI name 4" })).toBeVisible();
+		expect(within(dialog).getByText("Decision evidence · 1 of 2")).toBeVisible();
+		fireEvent.keyDown(dialog, { key: "ArrowRight" });
+		expect(within(dialog).getByRole("img", { name: "AI name 2" })).toBeVisible();
+		expect(within(dialog).getByRole("button", { name: "Next screenshot" })).toBeDisabled();
+	});
+	it("keeps inferred understanding collapsed and shows confirmed website grounding", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([intelligent]);
+		render(<ScreenshotBoard active />);
+		await screen.findByText("Test progressive setup");
+		expect(screen.getByText("A focused workspace")).not.toBeVisible();
+		fireEvent.click(
+			screen.getByText("Working understanding · medium confidence", { selector: "summary" }),
+		);
+		expect(screen.getByText("A focused workspace")).toBeVisible();
+		expect(screen.getByRole("link", { name: "example.com" })).toHaveAttribute(
+			"href",
+			"https://example.com/",
+		);
+	});
+	it("does not force advice when evidence supports no product decision", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([
+			{
+				...intelligent,
+				analysis: { ...intelligent.analysis!, decisions: [] },
+				companyContext: { domain: "https://example.com", status: "unavailable", sourceUrls: [] },
+			},
+		]);
+		render(<ScreenshotBoard active />);
+		await screen.findByText(/No supported product decision yet/);
+		expect(
+			within(screen.getByRole("region", { name: "Product advice" })).queryByText("Advice 1"),
+		).not.toBeInTheDocument();
+		expect(screen.getByText(/Company site wasn’t retrieved/)).toBeVisible();
+		expect(screen.queryByRole("link", { name: "example.com" })).not.toBeInTheDocument();
+	});
+	it("autosaves an optional company domain normalized by the backend without adding a brief", async () => {
+		vi.mocked(nativeBridgeClient.productIntel.saveSettings).mockImplementation(
+			async (settings) => ({ ...settings, companyDomain: "https://example.com" }),
+		);
+		await loadExistingBatch();
+		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
+		fireEvent.change(screen.getByLabelText("Company domain (optional)"), {
+			target: { value: "example.com" },
+		});
+		await screen.findByText("Saved");
+		expect(screen.getByLabelText("Company domain (optional)")).toHaveValue("https://example.com");
+		expect(nativeBridgeClient.productIntel.saveSettings).toHaveBeenCalledWith(
+			expect.objectContaining({ companyDomain: "example.com", productBrief: "" }),
+		);
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+	});
+	it("searches decision rationale through its referenced screenshots", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([intelligent]);
+		render(<ScreenshotBoard active />);
+		await screen.findByText("Test progressive setup");
+		fireEvent.change(screen.getByRole("searchbox", { name: "Search screenshots" }), {
+			target: { value: "dense form" },
+		});
+		expect(screen.getByText("2 of 4")).toBeVisible();
+		expect(screen.getByRole("button", { name: "View AI name 2" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "View AI name 4" })).toBeVisible();
+		expect(screen.queryByRole("button", { name: "View AI name 1" })).not.toBeInTheDocument();
+	});
+	it.each([
+		"JSON",
+		"Markdown",
+	])("exports %s with understanding, decision evidence and company grounding without private fields", async (format) => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([intelligent]);
+		const create = vi.fn((_blob: Blob) => "blob:report");
+		vi.stubGlobal(
+			"URL",
+			class extends URL {
+				static createObjectURL = create;
+				static revokeObjectURL = vi.fn();
+			},
+		);
+		vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+			/* Prevent jsdom navigation. */
+		});
+		render(<ScreenshotBoard active />);
+		await screen.findByText("Test progressive setup");
+		fireEvent.click(screen.getByText("More", { selector: "summary" }));
+		fireEvent.click(screen.getByRole("button", { name: `Export ${format}` }));
+		const contents = await new Promise<string>((resolve) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(String(reader.result));
+			reader.readAsText(create.mock.calls[0][0]);
+		});
+		expect(contents).toContain("A focused workspace");
+		expect(contents).toContain("Test progressive setup");
+		expect(contents).toContain(batch.images[3].id);
+		expect(contents).toContain("https://example.com/");
+		if (format === "Markdown") expect(contents).toContain(`Screen ID: ${batch.images[3].id}`);
+		expect(contents).not.toContain("/Users/test");
+		expect(contents).not.toContain("PRIVATE INSTRUCTIONS");
+		expect(contents).not.toContain("systemPrompt");
+	});
+});
+
+it("keeps the latest context when a pending save completes before a delayed tab reload", async () => {
+	vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([batch]);
+	const view = render(<ScreenshotBoard active />);
+	await screen.findByRole("button", { name: "View Capture 1.png" });
+	let finishSave: ((settings: typeof DEFAULT_INTEL_SETTINGS) => void) | undefined;
+	vi.mocked(nativeBridgeClient.productIntel.saveSettings).mockImplementationOnce(
+		() =>
+			new Promise((resolve) => {
+				finishSave = resolve;
+			}),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
+	fireEvent.change(screen.getByLabelText("Our product"), {
+		target: { value: "Latest exact wording!!" },
+	});
+	fireEvent.blur(screen.getByLabelText("Our product"));
+	await waitFor(() => expect(finishSave).toBeDefined());
+	let finishList: ((items: ScreenshotBatch[]) => void) | undefined;
+	vi.mocked(nativeBridgeClient.screenshotIntel.list).mockImplementationOnce(
+		() =>
+			new Promise((resolve) => {
+				finishList = resolve;
+			}),
+	);
+	view.rerender(<ScreenshotBoard active={false} />);
+	view.rerender(<ScreenshotBoard active />);
+	await waitFor(() => expect(finishList).toBeDefined());
+	await act(async () => {
+		finishSave?.({ ...DEFAULT_INTEL_SETTINGS, productBrief: "Latest exact wording!!" });
+	});
+	await act(async () => {
+		finishList?.([batch]);
+	});
+	expect(screen.getByLabelText("Our product")).toHaveValue("Latest exact wording!!");
 });
