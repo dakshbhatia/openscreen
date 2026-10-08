@@ -42,8 +42,13 @@ once their metadata is in (`dropVideoTrack`, under the `AudioVideoTracks` Blink 
 editor window enables). Left alone, each decoded the whole recording a second and a third
 time beside the compositor: ~6.7 % of an RTX 4070 Ti's decode engine apiece on a 1080p60
 take, measured, and zero once the track is dropped, with the clock, `playbackRate` and seeks
-unchanged. A recording without sound keeps its picture: with neither track selected the
-element has nothing left to keep time with and races to its end. The `WebcamOverlay`
+unchanged. A recording without sound drops its picture too, but with neither track selected
+the element has nothing left to keep time with and jumps to its end on `play`, so it keeps
+time by the wall clock instead (`keepTimeByWallClock`, `wallClock.ts`): it never plays for
+real, and answers `play`, `pause`, `currentTime` and `playbackRate` from a clock that runs
+`playbackRate` times the wall clock. Before that, a soundless take was decoded twice by
+Chromium at the speed region's rate, against the compositor's own decode: at 4K and 3× the
+view fell 3.5 s of playback behind the playhead (#994). The `WebcamOverlay`
 `<video>` is never played at all — it is read for the camera's size (`loadedmetadata`),
 which shapes the PiP box in the scene.
 

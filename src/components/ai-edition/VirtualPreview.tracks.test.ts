@@ -24,12 +24,45 @@ describe("dropVideoTrack", () => {
 	});
 
 	// With neither track selected an element has no stream left to keep time with: measured,
-	// its clock races to the end instead of playing.
-	it("leaves a recording without sound decoding, so its clock still runs", () => {
-		const { element: media, videoTracks } = element({ audio: 0, video: 1 });
+	// it jumps to its end on play. So it keeps time by the wall clock (issue #994).
+	it("deselects the picture of a recording without sound too, and keeps time by the wall clock", () => {
+		// Accessors on the prototype, where the element's own live.
+		class Media extends EventTarget {
+			duration = 10;
+			time = 0;
+			rate = 1;
+			get currentTime() {
+				return this.time;
+			}
+			set currentTime(sec: number) {
+				this.time = sec;
+			}
+			get playbackRate() {
+				return this.rate;
+			}
+			set playbackRate(rate: number) {
+				this.rate = rate;
+			}
+			get paused() {
+				return true;
+			}
+			play(): Promise<void> {
+				throw new Error("played for real");
+			}
+			pause(): void {
+				throw new Error("never playing for real, so never paused for real");
+			}
+		}
+		const videoTracks = [{ selected: true }];
+		const media = Object.assign(new Media(), {
+			audioTracks: { length: 0 },
+			videoTracks,
+		}) as unknown as HTMLMediaElement;
 
-		expect(dropVideoTrack(media)).toBe(false);
-		expect(videoTracks[0].selected).toBe(true);
+		expect(dropVideoTrack(media)).toBe(true);
+		expect(videoTracks[0].selected).toBe(false);
+		void media.play();
+		expect(media.paused).toBe(false);
 	});
 
 	it("does nothing where the track lists are absent (the Blink feature is off)", () => {

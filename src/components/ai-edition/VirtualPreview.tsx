@@ -51,6 +51,7 @@ import {
 	retryDelayMs,
 } from "./mediaError";
 import styles from "./VirtualPreview.module.css";
+import { keepTimeByWallClock } from "./wallClock";
 
 export interface VideoSource {
 	id: string;
@@ -193,14 +194,17 @@ interface MediaTrackLists {
  * deselected the element decodes no frame, and its clock, `playbackRate` and seeks behave
  * the same.
  *
- * Only when the element has a sound track: with neither track selected it has no stream
- * left to keep time with, and races to its end. A recording without sound keeps decoding,
- * as before. Returns whether the track was dropped.
+ * Without a sound track the element has no stream left to keep time with once its picture
+ * is deselected (measured: it jumps to its end on `play`), so it keeps time by the wall clock
+ * instead (`keepTimeByWallClock`, issue #994). Returns whether the track was dropped.
  */
 export function dropVideoTrack(element: HTMLMediaElement): boolean {
 	const { audioTracks, videoTracks } = element as HTMLMediaElement & MediaTrackLists;
-	if (!videoTracks?.length || !audioTracks?.length) {
+	if (!videoTracks?.length || !audioTracks) {
 		return false;
+	}
+	if (audioTracks.length === 0) {
+		keepTimeByWallClock(element);
 	}
 	for (let index = 0; index < videoTracks.length; index++) {
 		videoTracks[index].selected = false;
