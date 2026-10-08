@@ -1,9 +1,9 @@
 {
-	"name": "openscreen",
+	"name": "product-intel",
 	"private": true,
 	"version": "2.0.0",
-	"description": "Record your screen and polish the demo",
-	"homepage": "https://getopenscreen.com/",
+	"description": "Product research from screenshots and recordings with Gemini",
+	"homepage": "https://github.com/dakshbhatia/openscreen/tree/competitor-intel-v2",
 	"license": "MIT",
 	"type": "module",
 	"packageManager": "npm@10.9.4",
@@ -17,7 +17,7 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/getopenscreen/openscreen.git"
+		"url": "git+https://github.com/dakshbhatia/openscreen.git"
 	},
 	"contributors": [
 		{
@@ -32,6 +32,8 @@
 		}
 	],
 	"scripts": {
+		"setup:intel:mac": "npm ci && node scripts/stage-product-intel-mac.mjs",
+		"build:intel:mac": "npm run build-vite && electron-builder --mac --dir --publish never",
 		"dev": "vite",
 		"build": "tsc && vite build && electron-builder",
 		"lint": "biome check .",
@@ -135,6 +137,7 @@
 		"react-icons": "^5.6.0",
 		"react-resizable-panels": "^3.0.6",
 		"react-rnd": "^10.5.3",
+		"sharp": "0.35.5",
 		"sonner": "^2.0.7",
 		"tailwind-merge": "^3.5.0",
 		"tailwindcss-animate": "^1.0.7",

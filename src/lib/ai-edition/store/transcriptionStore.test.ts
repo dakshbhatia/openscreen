@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
+import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toastText } from "@/i18n/toastText";
 import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { useProjectStore } from "./projectStore";
-import { useTranscriptionStore, whenTranscriptionIdle } from "./transcriptionStore";
+import {
+	useAutoTranscription,
+	useTranscriptionStore,
+	whenTranscriptionIdle,
+} from "./transcriptionStore";
 
 const bridgeMocks = vi.hoisted(() => ({
 	save: vi.fn(),
@@ -125,6 +130,22 @@ describe("useTranscriptionStore", () => {
 		vi.clearAllMocks();
 		// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the preload bridge
 		delete (window as any).electronAPI;
+	});
+
+	it("defers local transcription until the full editor enables it", async () => {
+		transcribeMocks.transcribeAsset.mockImplementation(
+			async (_doc: AxcutDocument, assetId: string) => transcriptFor(assetId),
+		);
+		loadDocument(makeDoc(["asset_1"]));
+		const view = renderHook(({ enabled }) => useAutoTranscription(enabled), {
+			initialProps: { enabled: false },
+		});
+		await whenTranscriptionIdle();
+		expect(transcribeMocks.transcribeAsset).not.toHaveBeenCalled();
+		view.rerender({ enabled: true });
+		await whenTranscriptionIdle();
+		expect(transcribeMocks.transcribeAsset).toHaveBeenCalledTimes(1);
+		view.unmount();
 	});
 
 	it("transcribes every asset that has no transcript, one at a time", async () => {

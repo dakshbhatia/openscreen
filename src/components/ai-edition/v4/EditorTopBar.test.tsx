@@ -42,7 +42,9 @@ const noop = () => {};
 function renderTopBar(
 	projectTitle: string | null,
 	history: { canUndo?: boolean; canRedo?: boolean } = {},
+	mode: "edit" | "research" = "edit",
 ) {
+	const onModeChange = vi.fn();
 	const onRename = vi.fn();
 	const onShowAbout = vi.fn();
 	const onCheckForUpdates = vi.fn();
@@ -56,8 +58,8 @@ function renderTopBar(
 	render(
 		<TooltipProvider>
 			<EditorTopBar
-				mode="edit"
-				onModeChange={noop}
+				mode={mode}
+				onModeChange={onModeChange}
 				projectTitle={projectTitle}
 				dirty={false}
 				canExport={false}
@@ -82,6 +84,7 @@ function renderTopBar(
 		</TooltipProvider>,
 	);
 	return {
+		onModeChange,
 		onRename,
 		onShowAbout,
 		onCheckForUpdates,
@@ -473,5 +476,22 @@ describe("AppMenu sizing (issue #969)", () => {
 		const version = rule("appMenuVersion");
 		expect(version).toMatch(/white-space:\s*nowrap/);
 		expect(version).toMatch(/flex-shrink:\s*0/);
+	});
+});
+
+describe("Research topbar", () => {
+	it("keeps editor and project controls behind More while preserving app settings", () => {
+		const actions = renderTopBar("Competitor", {}, "research");
+		expect(screen.getByText("Product intel")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Full editor" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open project" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByLabelText("More app controls"));
+		fireEvent.click(screen.getByRole("button", { name: "Full editor" }));
+		expect(actions.onModeChange).toHaveBeenCalledWith("edit");
+		fireEvent.click(screen.getByRole("button", { name: "Open project" }));
+		expect(actions.onOpenProject).toHaveBeenCalledOnce();
+		fireEvent.click(screen.getByRole("button", { name: "App settings" }));
+		expect(screen.getByRole("menuitem", { name: "providerSettings.title" })).toBeInTheDocument();
 	});
 });

@@ -15,6 +15,7 @@ import {
 	migrateRawDocumentToCurrent,
 } from "@/lib/ai-edition/document/migrate";
 import {
+	clipAwaitsProbedDuration,
 	documentAfterProbedDuration,
 	PLACEHOLDER_DURATION_SEC,
 } from "@/lib/ai-edition/document/timeline";
@@ -70,6 +71,7 @@ import {
 	type UnsavedChoice,
 } from "./Modals";
 import { Preview } from "./Preview";
+import { ResearchWorkspace } from "./ResearchWorkspace";
 import { importPendingRecording, maybeSaveFreshRecordingAutoZooms } from "./recordingImport";
 import { AddAudioLayerDialog } from "./v4/AddAudioLayerDialog";
 import v4 from "./v4/EditorShellV4.module.css";
@@ -210,16 +212,18 @@ export function NewEditorShell() {
 
 	const [seekTarget, setSeekTarget] = useState<SeekTarget | null>(null);
 	const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
-	// v4 shell: three modes (Media / Edit / Rec), a collapsible agent (chat)
-	// column, and a floating facet inspector over the stage.
-	const [mode, setMode] = useState<EditorMode>("edit");
+	// Research is the default workspace; the complete video editor remains available.
+	const [mode, setMode] = useState<EditorMode>("research");
 	const [chatOpen, setChatOpen] = useState(false);
+	const [importingRecording, setImportingRecording] = useState(false);
+	const [freshRecordingProjectId, setFreshRecordingProjectId] = useState<string | null>(null);
 	const pendingChatPrompt = useChatPromptBus((s) => s.pending);
 	useEffect(() => {
-		if (pendingChatPrompt && !chatOpen) {
+		if (pendingChatPrompt && (mode !== "edit" || !chatOpen)) {
+			setMode("edit");
 			setChatOpen(true);
 		}
-	}, [pendingChatPrompt, chatOpen]);
+	}, [pendingChatPrompt, chatOpen, mode]);
 	const [chatWidthPx, setChatWidthPx] = useState(
 		() => Number(localStorage.getItem("os-editor-chat-width")) || 392,
 	);
@@ -281,7 +285,7 @@ export function NewEditorShell() {
 	// captions, the transcript pane) needs one, so the editor produces them by
 	// itself instead of waiting for the user to find the button. This hook is
 	// the ONLY place the background pass is driven from — see transcriptionStore.
-	useAutoTranscription();
+	useAutoTranscription(mode !== "research");
 	const requestTimelineTranscripts = useTranscriptionStore((s) => s.requestTimelineTranscripts);
 	// Resolved over the assets the TIMELINE plays, not over the primary asset: in
 	// a recording project the primary asset is the screen capture, which is
@@ -386,6 +390,7 @@ export function NewEditorShell() {
 			if (!window.electronAPI) return;
 			try {
 				if (await importPendingRecording((warning) => toast.warning(warning))) {
+					setFreshRecordingProjectId(useProjectStore.getState().projectId);
 					toast.success("Recording added to a new project");
 					return;
 				}
@@ -966,6 +971,29 @@ export function NewEditorShell() {
 		}
 	}, [promptUnsaved]);
 
+	const handleImportRecording = useCallback(async () => {
+		if (importingRecording) return;
+		setImportingRecording(true);
+		try {
+			const picker = await window.electronAPI?.openVideoFilePicker();
+			if (!picker?.success || !picker.path) return;
+			const choice = await promptUnsaved("new");
+			if (choice === "cancel") return;
+			const label = picker.name || picker.path.split(/[\\/]/).pop() || "Recording";
+			await createProject(label.replace(/\.[^.]+$/, ""));
+			const asset = await useProjectStore.getState().addAsset(picker.path, label);
+			if (!asset) throw new Error("The recording could not be imported. Please try again.");
+			setMode("research");
+			toast.success("Recording ready for research");
+		} catch (error) {
+			toast.error("Could not import recording", {
+				description: error instanceof Error ? error.message : String(error),
+			});
+		} finally {
+			setImportingRecording(false);
+		}
+	}, [createProject, importingRecording, promptUnsaved]);
+
 	const handleExport = useCallback(() => {
 		if (!hasAsset) {
 			toast.info("Add a video to the project before exporting.");
@@ -1266,6 +1294,8 @@ export function NewEditorShell() {
 				return;
 			}
 
+			if (mode === "research") return;
+
 			const deleteSelection = () => {
 				// F2.7 — a shift-click multi-selection deletes as one batch (one
 				// undo snapshot); a single selection keeps the original path.
@@ -1420,6 +1450,7 @@ export function NewEditorShell() {
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	}, [
+		mode,
 		hasProject,
 		handleCopyRegion,
 		handleSave,
@@ -1435,7 +1466,18 @@ export function NewEditorShell() {
 		handleSeek,
 	]);
 
-	const showTimeline = mode !== "rec";
+	const researchAsset =
+		document?.assets.find(
+			(asset) => asset.id === document.project.primaryAssetId && asset.kind !== "audio",
+		) ?? null;
+	const researchSourceReady = Boolean(
+		researchAsset?.durationSec &&
+			researchAsset.durationSec > 0 &&
+			Number.isFinite(researchAsset.durationSec) &&
+			!clips.some((clip) => clipAwaitsProbedDuration(clip, researchAsset.id)),
+	);
+
+	const showTimeline = mode === "edit" || mode === "media";
 	const timelineRow = mode === "media" ? "188px" : `${timelineHeightPx}px`;
 	const bodyColumns = mode === "edit" && chatOpen ? `${chatWidthPx}px 1fr` : "1fr";
 
@@ -1522,10 +1564,13 @@ export function NewEditorShell() {
 			className={v4.app}
 			style={{ gridTemplateRows: `58px 1fr ${showTimeline ? timelineRow : "0px"}` }}
 		>
-			<NativePlaybackSync visibleClips={visibleClips} clips={clips} />
+			{mode === "edit" ? <NativePlaybackSync visibleClips={visibleClips} clips={clips} /> : null}
 			<EditorTopBar
 				mode={mode}
-				onModeChange={setMode}
+				onModeChange={(next) => {
+					setPlaying(false);
+					setMode(next);
+				}}
 				projectTitle={project?.title ?? null}
 				dirty={dirty}
 				canExport={hasAsset}
@@ -1535,6 +1580,10 @@ export function NewEditorShell() {
 				canRedo={redoStack.length > 0}
 				chatOpen={chatOpen}
 				actions={{
+					analyzeProductFlow: () => {
+						setPlaying(false);
+						setMode("research");
+					},
 					openProject: () => setOpenProjectOpen(true),
 					newProject: () => setNewProjectOpen(true),
 					save: () => void handleSave(),
@@ -1568,6 +1617,22 @@ export function NewEditorShell() {
 				) : null}
 
 				<section className={v4.stage} aria-label={te("shell.previewStage")}>
+					<ResearchWorkspace
+						active={mode === "research"}
+						projectId={projectId}
+						projectTitle={project?.title ?? null}
+						freshRecordingProjectId={freshRecordingProjectId}
+						asset={researchAsset}
+						sourceReady={researchSourceReady}
+						importing={importingRecording}
+						onRecord={() => setMode("rec")}
+						onImport={() => void handleImportRecording()}
+						onLoadedMetadata={(durationSec, assetId) => {
+							if (useProjectStore.getState().projectId === projectId) {
+								handleLoadedMetadata(durationSec, assetId);
+							}
+						}}
+					/>
 					{mode === "edit" ? (
 						<>
 							<div
@@ -1659,12 +1724,12 @@ export function NewEditorShell() {
 						</>
 					) : mode === "media" ? (
 						<MediaStage onAddToTimeline={handleDropAsset} />
-					) : (
+					) : mode === "rec" ? (
 						<RecStage
 							onStartRecording={() => void handleNewRecording()}
-							onClose={() => setMode("edit")}
+							onClose={() => setMode("research")}
 						/>
-					)}
+					) : null}
 				</section>
 			</div>
 

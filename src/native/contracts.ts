@@ -595,6 +595,53 @@ export type NativeBridgeRequest =
 	  }
 	| {
 			domain: "aiEdition";
+			action: "intel.snapshot";
+			payload: { projectId?: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "screenshots.pick" | "screenshots.list";
+			payload?: EmptyPayload;
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "screenshots.import";
+			payload: { paths: string[] };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action:
+				| "screenshots.get"
+				| "screenshots.analyze"
+				| "screenshots.cancel"
+				| "screenshots.organize"
+				| "screenshots.reveal";
+			payload: { batchId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "intel.settings";
+			payload: { settings: import("../lib/product-intel").IntelSettings };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "intel.analyze";
+			payload: { projectId: string; reuse?: boolean };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "intel.cancel";
+			payload: { projectId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
 			action: "document.listProjects";
 			payload?: EmptyPayload;
 			requestId?: string;

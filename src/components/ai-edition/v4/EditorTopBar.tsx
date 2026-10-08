@@ -1,4 +1,5 @@
 import {
+	ArrowUpRight,
 	ChevronDown,
 	Download,
 	FolderOpen,
@@ -11,6 +12,7 @@ import {
 	Redo2,
 	RefreshCw,
 	Save,
+	ScanEye,
 	Sparkles,
 	Star,
 	Sun,
@@ -24,12 +26,14 @@ import { useShortcuts } from "@/contexts/ShortcutsContext";
 import { useTheme } from "@/hooks/useTheme";
 import { getAvailableLocales, getLocaleName } from "@/i18n/loader";
 import { formatFirstFixedBinding } from "@/lib/shortcuts";
+import research from "../ResearchWorkspace.module.css";
 import { StylePresetsMenu } from "../StylePresetsMenu";
 import styles from "./EditorShellV4.module.css";
 
-export type EditorMode = "media" | "edit" | "rec";
+export type EditorMode = "research" | "media" | "edit" | "rec";
 
 export interface TopBarActions {
+	analyzeProductFlow?: () => void;
 	openProject: () => void;
 	newProject: () => void;
 	save: () => void;
@@ -76,7 +80,56 @@ export function EditorTopBar({
 	const t = useScopedT("editor");
 	const tShortcuts = useScopedT("shortcuts");
 	const { isMac } = useShortcuts();
+	const [moreOpen, setMoreOpen] = useState(false);
 	const savedLabel = dirty ? t("topbar.unsaved") : t("topbar.saved");
+
+	if (mode === "research") {
+		return (
+			<header className={`${styles.topbar} ${research.topbar}`}>
+				<span className={research.wordmark}>Product intel</span>
+				<details
+					className={research.moreMenu}
+					open={moreOpen}
+					onKeyDown={(event) => {
+						if (event.key === "Escape") setMoreOpen(false);
+					}}
+				>
+					<summary
+						aria-label="More app controls"
+						onClick={(event) => {
+							event.preventDefault();
+							setMoreOpen((previous) => !previous);
+						}}
+					>
+						More <ChevronDown size={13} aria-hidden />
+					</summary>
+					<div className={research.moreContent} hidden={!moreOpen}>
+						<button
+							type="button"
+							className={research.secondaryButton}
+							onClick={actions.openProject}
+						>
+							<FolderOpen size={14} aria-hidden /> Open project
+						</button>
+						<button
+							type="button"
+							className={research.secondaryButton}
+							onClick={() => onModeChange("edit")}
+						>
+							Full editor <ArrowUpRight size={14} aria-hidden />
+						</button>
+						{projectTitle ? (
+							<div className={research.projectIdentity}>
+								<ProjectNameField title={projectTitle} onRename={actions.renameProject} />
+								<span className={research.savedState}>{savedLabel}</span>
+							</div>
+						) : null}
+						<AppMenu actions={actions} contained />
+					</div>
+				</details>
+			</header>
+		);
+	}
 
 	// ponytail: the left side panel only renders in "edit" mode (see
 	// NewEditorShell body), so its toggle is meaningless in Media/Rec —
@@ -174,6 +227,19 @@ export function EditorTopBar({
 				</button>
 			</Tooltip>
 			<StylePresetsMenu />
+			{actions.analyzeProductFlow ? (
+				<Tooltip content="Back to research">
+					<button
+						type="button"
+						className={research.secondaryButton}
+						aria-label="Back to research"
+						onClick={actions.analyzeProductFlow}
+					>
+						<ScanEye size={17} />
+						Research
+					</button>
+				</Tooltip>
+			) : null}
 			<button
 				type="button"
 				className={styles.exportBtn}
@@ -278,7 +344,7 @@ async function readUpdateVeto(cancelled: () => boolean, apply: (allowed: boolean
 	}
 }
 
-function AppMenu({ actions }: { actions: TopBarActions }) {
+function AppMenu({ actions, contained = false }: { actions: TopBarActions; contained?: boolean }) {
 	const tCommon = useScopedT("common");
 	const tEditor = useScopedT("editor");
 	const tShortcuts = useScopedT("shortcuts");
@@ -387,17 +453,22 @@ function AppMenu({ actions }: { actions: TopBarActions }) {
 				className={`${styles.brand} ${styles.brandBtn}`}
 				aria-haspopup="menu"
 				aria-expanded={open}
-				aria-label="OpenScreen"
+				aria-label={contained ? "App settings" : "OpenScreen"}
 				onClick={() => setOpen((v) => !v)}
 			>
 				{/* Decorative: the wordmark beside it already names the app — and, being the
 				    button's only text, is also its accessible name. */}
 				<img src={logoMark} alt="" draggable={false} />
-				<span className={styles.name}>OpenScreen</span>
+				<span className={styles.name}>{contained ? "App settings" : "OpenScreen"}</span>
 				<ChevronDown size={13} className={styles.brandChevron} aria-hidden />
 			</button>
 			{open ? (
-				<div ref={menuRef} className={styles.appMenu} role="menu" onKeyDown={onMenuKeyDown}>
+				<div
+					ref={menuRef}
+					className={`${styles.appMenu}${contained ? ` ${research.containedAppMenu}` : ""}`}
+					role="menu"
+					onKeyDown={onMenuKeyDown}
+				>
 					{/* The file actions that used to be three icons in the bar. Their labels are the
 					    keys those icons carried as tooltips; Ctrl+N / Ctrl+O / Ctrl+S still reach them
 					    through the native menu's accelerators. */}

@@ -1417,7 +1417,8 @@ appReady?.then(async () => {
 		return;
 	}
 
-	createWindow();
+	// Product Intel starts in the research workspace; recording opens the HUD on demand.
+	createEditorWindowWrapper();
 	// Off unless the user turned it on in Settings → AI. Started here rather than
 	// in registerIpcHandlers so neither the headless CLI nor a bench run binds it.
 	void mcpController.startIfEnabled();

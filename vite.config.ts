@@ -32,7 +32,7 @@ export default defineConfig({
 					return startup(["."], { env });
 				},
 				vite: {
-					build: {},
+					build: { rollupOptions: { external: ["sharp"] } },
 				},
 			},
 			preload: {

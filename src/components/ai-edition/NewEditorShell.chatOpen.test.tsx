@@ -48,13 +48,16 @@ vi.mock("./LeftPanel", () => ({
 import { NewEditorShell } from "./NewEditorShell";
 
 function renderShell() {
-	return render(
+	const result = render(
 		<TooltipProvider>
 			<EditorDialogsProvider>
 				<NewEditorShell />
 			</EditorDialogsProvider>
 		</TooltipProvider>,
 	);
+	fireEvent.click(result.getByLabelText("More app controls"));
+	fireEvent.click(result.getByRole("button", { name: "Full editor" }));
+	return result;
 }
 
 describe("NewEditorShell chatOpen behavior with useChatPromptBus", () => {

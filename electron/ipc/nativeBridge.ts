@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, shell } from "electron";
 import type { AiEditionChatEvent } from "../../src/native/contracts";
 import {
 	NATIVE_BRIDGE_CHANNEL,
@@ -12,8 +12,12 @@ import {
 } from "../../src/native/contracts";
 import type { ChatEventSink } from "../ai-edition/chat-service";
 import type { DocumentService } from "../ai-edition/document-service";
+import { ProductIntelService } from "../ai-edition/product-intel-service";
+import { PROVIDER_DEFINITIONS } from "../ai-edition/provider-registry";
+import { ScreenshotIntelService } from "../ai-edition/screenshot-intel-service";
 import { StylePresetError, type StylePresetService } from "../ai-edition/style-preset-service";
 import { isValidMcpPort } from "../mcp/mcp-settings-store";
+import { showOpenDialogOver } from "../messageBox";
 import {
 	type CursorTelemetryLoadResult,
 	TelemetryCursorAdapter,
@@ -251,6 +255,32 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 	});
 
 	const gifExportJobs = new GifExportJobs();
+	let productIntel: ProductIntelService | null = null;
+	const intel = () =>
+		(productIntel ??= new ProductIntelService(
+			app.getPath("userData"),
+			async (projectId) => {
+				const document = await context.getAiEditionDocuments().getProject(projectId);
+				const asset = document.assets.find((item) => item.id === document.project.primaryAssetId);
+				if (!asset || asset.kind !== "video")
+					throw new Error("Open a recording before analyzing a product flow.");
+				return { assetId: asset.id, path: asset.originalPath, durationSec: asset.durationSec ?? 0 };
+			},
+			() => {
+				const google = PROVIDER_DEFINITIONS.find((provider) => provider.id === "google");
+				return context.getAiEditionLlmConfig().getApiKey("google", google?.envKeys ?? []);
+			},
+		));
+	let screenshotIntel: ScreenshotIntelService | null = null;
+	const screenshots = () =>
+		(screenshotIntel ??= new ScreenshotIntelService(
+			app.getPath("userData"),
+			() => intel().getSettings(),
+			() => {
+				const google = PROVIDER_DEFINITIONS.find((provider) => provider.id === "google");
+				return context.getAiEditionLlmConfig().getApiKey("google", google?.envKeys ?? []);
+			},
+		));
 	ipcMain.handle(NATIVE_BRIDGE_CHANNEL, async (event, request: unknown) => {
 		if (!isBridgeRequest(request)) {
 			return createErrorResponse(undefined, "INVALID_REQUEST", "Invalid native bridge request.");
@@ -512,6 +542,70 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 				case "aiEdition": {
 					const action = request.action as string;
 					switch (request.action) {
+						case "screenshots.pick": {
+							const result = await showOpenDialogOver(BrowserWindow.fromWebContents(event.sender), {
+								title: "Import screenshots",
+								properties: ["openFile", "multiSelections"],
+								filters: [{ name: "Screenshots", extensions: ["png", "jpg", "jpeg", "webp"] }],
+							});
+							return createSuccessResponse(
+								requestId,
+								result.canceled ? null : await screenshots().import(result.filePaths),
+							);
+						}
+						case "screenshots.import":
+							return createSuccessResponse(
+								requestId,
+								await screenshots().import(request.payload.paths),
+							);
+						case "screenshots.list":
+							return createSuccessResponse(requestId, await screenshots().list());
+						case "screenshots.get":
+							return createSuccessResponse(
+								requestId,
+								await screenshots().get(request.payload.batchId),
+							);
+						case "screenshots.analyze":
+							return createSuccessResponse(
+								requestId,
+								await screenshots().analyze(request.payload.batchId),
+							);
+						case "screenshots.cancel":
+							screenshots().cancel(request.payload.batchId);
+							return createSuccessResponse(requestId, undefined);
+						case "screenshots.organize":
+							return createSuccessResponse(
+								requestId,
+								await screenshots().organize(request.payload.batchId),
+							);
+						case "screenshots.reveal": {
+							const batch = await screenshots().get(request.payload.batchId);
+							if (!batch.organizedPath)
+								throw new Error(
+									"Analyze this screenshot batch before opening its organized folder.",
+								);
+							const error = await shell.openPath(batch.organizedPath);
+							if (error) throw new Error("The organized screenshots folder could not be opened.");
+							return createSuccessResponse(requestId, undefined);
+						}
+						case "intel.snapshot":
+							return createSuccessResponse(
+								requestId,
+								await intel().snapshot(request.payload?.projectId),
+							);
+						case "intel.settings":
+							return createSuccessResponse(
+								requestId,
+								await intel().saveSettings(request.payload.settings),
+							);
+						case "intel.analyze":
+							return createSuccessResponse(
+								requestId,
+								await intel().analyze(request.payload.projectId, request.payload.reuse),
+							);
+						case "intel.cancel":
+							intel().cancel(request.payload.projectId);
+							return createSuccessResponse(requestId, undefined);
 						case "document.listProjects":
 							return createSuccessResponse(requestId, await aiEditionService.listProjects());
 						case "document.get":

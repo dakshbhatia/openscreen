@@ -94,6 +94,80 @@ export async function requireNativeBridgeData<TData>(request: NativeBridgeReques
 
 export const nativeBridgeClient = {
 	rawInvoke: invokeNativeBridge,
+	screenshotIntel: {
+		pick: () =>
+			requireNativeBridgeData<import("../lib/screenshot-intel").ScreenshotBatch | null>({
+				domain: "aiEdition",
+				action: "screenshots.pick",
+			}),
+		import: (paths: string[]) =>
+			requireNativeBridgeData<import("../lib/screenshot-intel").ScreenshotBatch>({
+				domain: "aiEdition",
+				action: "screenshots.import",
+				payload: { paths },
+			}),
+		list: () =>
+			requireNativeBridgeData<import("../lib/screenshot-intel").ScreenshotBatch[]>({
+				domain: "aiEdition",
+				action: "screenshots.list",
+			}),
+		get: (batchId: string) =>
+			requireNativeBridgeData<import("../lib/screenshot-intel").ScreenshotBatch>({
+				domain: "aiEdition",
+				action: "screenshots.get",
+				payload: { batchId },
+			}),
+		analyze: (batchId: string) =>
+			requireNativeBridgeData<import("../lib/screenshot-intel").ScreenshotBatch>({
+				domain: "aiEdition",
+				action: "screenshots.analyze",
+				payload: { batchId },
+			}),
+		cancel: (batchId: string) =>
+			requireNativeBridgeData<void>({
+				domain: "aiEdition",
+				action: "screenshots.cancel",
+				payload: { batchId },
+			}),
+		organize: (batchId: string) =>
+			requireNativeBridgeData<import("../lib/screenshot-intel").ScreenshotBatch>({
+				domain: "aiEdition",
+				action: "screenshots.organize",
+				payload: { batchId },
+			}),
+		reveal: (batchId: string) =>
+			requireNativeBridgeData<void>({
+				domain: "aiEdition",
+				action: "screenshots.reveal",
+				payload: { batchId },
+			}),
+	},
+	productIntel: {
+		snapshot: (projectId?: string) =>
+			requireNativeBridgeData<import("../lib/product-intel").IntelSnapshot>({
+				domain: "aiEdition",
+				action: "intel.snapshot",
+				payload: { projectId },
+			}),
+		saveSettings: (settings: import("../lib/product-intel").IntelSettings) =>
+			requireNativeBridgeData<import("../lib/product-intel").IntelSettings>({
+				domain: "aiEdition",
+				action: "intel.settings",
+				payload: { settings },
+			}),
+		analyze: (projectId: string, reuse = false) =>
+			requireNativeBridgeData<import("../lib/product-intel").IntelReport>({
+				domain: "aiEdition",
+				action: "intel.analyze",
+				payload: { projectId, reuse },
+			}),
+		cancel: (projectId: string) =>
+			requireNativeBridgeData<void>({
+				domain: "aiEdition",
+				action: "intel.cancel",
+				payload: { projectId },
+			}),
+	},
 	system: {
 		getPlatform: () =>
 			requireNativeBridgeData<NativePlatform>({

@@ -1,9 +1,10 @@
 // @see - https://www.electron.build/configuration/configuration
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "com.etiennelescot.openscreen",
+  "appId": "com.dakshbhatia.productintel",
   "asar": true,
-  "productName": "Openscreen",
+  "asarUnpack": ["node_modules/@img/**"],
+  "productName": "Product Intel",
   // There is deliberately no `electronVersion` here. electron-builder needs an EXACT
   // version because it downloads the binaries for one release, and it takes that from
   // package.json's `electron` devDependency, which is pinned without a caret for this
@@ -38,7 +39,7 @@
   "publish": [
     {
       "provider": "github",
-      "owner": "getopenscreen",
+      "owner": "dakshbhatia",
       "repo": "openscreen"
     }
   ],
@@ -99,14 +100,19 @@
     "!dist/cursors/**",
     "!dist/mediapipe/**",
     "!dist/fonts/**",
-    // Exclude dead-weight node_modules: all frontend and electron code is pre-bundled by Vite (saves ~238 MB)
+    // Most code is bundled by Vite. Sharp remains external because it loads native libraries.
     "!node_modules/**",
     "!*.png",
     "!preview*.png",
     "!*.md",
     "!README.md",
     "!CONTRIBUTING.md",
-    "!LICENSE"
+    "!LICENSE",
+    {
+      "from": "node_modules",
+      "to": "node_modules",
+      "filter": ["sharp/**", "@img/**", "detect-libc/**", "semver/**"]
+    }
   ],
   // Asset layout contract: "wallpapers/" and "cursors/" under resourcesPath must
   // align with assetBaseDir in electron/preload.ts (packaged branch).

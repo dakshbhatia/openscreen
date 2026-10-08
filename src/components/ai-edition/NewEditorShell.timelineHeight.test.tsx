@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom";
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const nativePlayback = vi.hoisted(() => vi.fn());
+vi.mock("@/native/useNativePlaybackSync", () => ({ useNativePlaybackSync: nativePlayback }));
 
 vi.mock("@/contexts/ShortcutsContext", async () => {
 	const { DEFAULT_SHORTCUTS } = await import("@/lib/shortcuts");
@@ -38,19 +41,25 @@ import {
 	NewEditorShell,
 } from "./NewEditorShell";
 
-function renderShell() {
-	return render(
+function renderShell(enterEditor = true) {
+	const result = render(
 		<TooltipProvider>
 			<EditorDialogsProvider>
 				<NewEditorShell />
 			</EditorDialogsProvider>
 		</TooltipProvider>,
 	);
+	if (enterEditor) {
+		fireEvent.click(result.getByLabelText("More app controls"));
+		fireEvent.click(result.getByRole("button", { name: "Full editor" }));
+	}
+	return result;
 }
 
 describe("NewEditorShell timeline height", () => {
 	beforeEach(() => {
 		localStorage.clear();
+		nativePlayback.mockClear();
 		(window as unknown as { electronAPI?: unknown }).electronAPI = {
 			onAiEditionChatEvent: () => () => {
 				/* unsubscribe */
@@ -96,6 +105,50 @@ describe("NewEditorShell timeline height", () => {
 	afterEach(() => {
 		cleanup();
 		localStorage.clear();
+	});
+
+	it("starts in research with editor tools unmounted, and switches both ways", () => {
+		const { container } = renderShell(false);
+		const root = container.firstElementChild as HTMLElement;
+		expect(screen.getByRole("main", { name: "Competitor research" })).toBeInTheDocument();
+		expect(root.style.gridTemplateRows).toBe("58px 1fr 0px");
+		expect(nativePlayback).not.toHaveBeenCalled();
+		expect(container.querySelector('[role="separator"][aria-orientation="horizontal"]')).toBeNull();
+		expect(screen.queryByRole("button", { name: "topbar.export" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByLabelText("More app controls"));
+		fireEvent.click(screen.getByRole("button", { name: "Full editor" }));
+		expect(nativePlayback).toHaveBeenCalled();
+		expect(root.style.gridTemplateRows).toBe(`58px 1fr ${DEFAULT_TIMELINE_HEIGHT_PX}px`);
+		expect(screen.getByRole("button", { name: "topbar.export" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Back to research" }));
+		expect(screen.getByRole("main", { name: "Competitor research" })).toBeInTheDocument();
+		expect(root.style.gridTemplateRows).toBe("58px 1fr 0px");
+	});
+
+	it("imports directly into a dedicated research project without opening the media editor", async () => {
+		const originalCreate = useProjectStore.getState().createProject;
+		const originalAdd = useProjectStore.getState().addAsset;
+		const create = vi.fn().mockResolvedValue(undefined);
+		const add = vi.fn().mockResolvedValue({ id: "imported" });
+		const picker = vi
+			.fn()
+			.mockResolvedValue({ success: true, path: "/recordings/flow.mp4", name: "flow.mp4" });
+		Object.assign(window.electronAPI ?? {}, { openVideoFilePicker: picker });
+		useProjectStore.setState({ createProject: create, addAsset: add, dirty: false });
+		try {
+			renderShell(false);
+			fireEvent.click(screen.getByRole("tab", { name: "Recording" }));
+			fireEvent.click(screen.getByRole("button", { name: "Import recording" }));
+			await waitFor(() => expect(add).toHaveBeenCalledWith("/recordings/flow.mp4", "flow.mp4"));
+			expect(create).toHaveBeenCalledWith("flow");
+			expect(screen.getByRole("main", { name: "Competitor research" })).toBeInTheDocument();
+			expect(screen.getByRole("tab", { name: "Recording" })).toHaveAttribute(
+				"aria-selected",
+				"true",
+			);
+		} finally {
+			useProjectStore.setState({ createProject: originalCreate, addAsset: originalAdd });
+		}
 	});
 
 	it("exports expected constants allowing all lanes to fit without vertical clipping", () => {
