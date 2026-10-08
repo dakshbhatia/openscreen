@@ -16,6 +16,8 @@ import {
 	productAnalysisSchema,
 } from "../../src/lib/product-intel";
 
+import { geminiHttpError } from "./gemini-errors";
+
 const API = "https://generativelanguage.googleapis.com";
 // Large bounded arrays make Google's response grammar reject otherwise valid
 // requests. Keep those limits in local validation, outside the wire schema.
@@ -151,10 +153,7 @@ export class ProductIntelService {
 				signal: controller.signal,
 				headers: { "x-goog-api-key": key ?? "", ...init.headers },
 			});
-			if (!response.ok)
-				throw new Error(
-					`Gemini request failed (${response.status}). Check your key, model and quota, then retry.`,
-				);
+			if (!response.ok) throw geminiHttpError(response.status, "recording");
 			return response;
 		};
 		try {

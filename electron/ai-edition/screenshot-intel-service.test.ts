@@ -102,6 +102,7 @@ describe("ScreenshotIntelService", () => {
 			"image/webp",
 		]);
 		expect(batch.analysis).toBeNull();
+		expect(batch).not.toHaveProperty("duplicatesSkipped");
 		for (const [index, imported] of batch.images.entries()) {
 			expect(imported.width).toBe(320);
 			expect(imported.height).toBe(240);
@@ -114,6 +115,54 @@ describe("ScreenshotIntelService", () => {
 		expect(await intel.get(batch.id)).toEqual(batch);
 		expect(await intel.list()).toEqual([batch]);
 	});
+	it("skips exact byte duplicates, preserves the first image and originals, and analyzes only survivors", async () => {
+		const first = await image("first.png");
+		const duplicate = path.join(originals, "duplicate.png");
+		const anotherDuplicate = path.join(originals, "another.png");
+		await fs.copyFile(first, duplicate);
+		await fs.copyFile(first, anotherDuplicate);
+		const unique = await image("unique.png", "png", 321);
+		const paths = [first, duplicate, unique, anotherDuplicate];
+		const before = await Promise.all(paths.map((file) => fs.readFile(file)));
+		const { fetcher, requests } = google();
+		const intel = service("test-gemini-key", fetcher);
+		const batch = await intel.import(paths);
+		expect(batch.duplicatesSkipped).toBe(2);
+		expect(batch.images.map((item) => item.originalName)).toEqual(["first.png", "unique.png"]);
+		expect(await fs.readdir(path.dirname(batch.images[0].path))).toHaveLength(2);
+		expect(await Promise.all(paths.map((file) => fs.readFile(file)))).toEqual(before);
+		expect((await intel.get(batch.id)).duplicatesSkipped).toBe(2);
+		const result = await intel.analyze(batch.id);
+		expect(result.duplicatesSkipped).toBe(2);
+		expect(result.analysis?.screens.map((screen) => screen.imageId)).toEqual(
+			batch.images.map((item) => item.id),
+		);
+		expect(requests[0].body.contents[0].parts.filter((part) => "inlineData" in part)).toHaveLength(
+			2,
+		);
+	});
+	it("keeps one valid image when every supplied file has identical bytes", async () => {
+		const first = await image();
+		const duplicate = path.join(originals, "duplicate.png");
+		await fs.copyFile(first, duplicate);
+		const batch = await service().import([first, duplicate]);
+		expect(batch.images).toHaveLength(1);
+		expect(batch.images[0].originalName).toBe("screen.png");
+		expect(batch.duplicatesSkipped).toBe(1);
+	});
+	it("still rolls back skipped duplicates if a later file is invalid", async () => {
+		const first = await image();
+		const duplicate = path.join(originals, "duplicate.png");
+		await fs.copyFile(first, duplicate);
+		const broken = path.join(originals, "broken.png");
+		await fs.writeFile(broken, "not an image");
+		const intel = service();
+		await expect(intel.import([first, duplicate, broken])).rejects.toThrow(/valid.*PNG/i);
+		expect(await intel.list()).toEqual([]);
+		expect(await fs.readdir(path.join(root, "screenshot-intel"))).toEqual([]);
+		expect(await fs.readFile(duplicate)).toEqual(await fs.readFile(first));
+	});
+
 	it("rolls back the whole managed batch if any image is invalid", async () => {
 		const valid = await image();
 		const invalid = path.join(originals, "broken.png");
@@ -205,13 +254,27 @@ describe("ScreenshotIntelService", () => {
 		expect(await intel.organize(batch.id)).toEqual(result);
 		expect(await fs.readdir(result.organizedPath ?? "")).toEqual(groups);
 	});
+	it.each([
+		401, 403, 429, 404, 400, 503, 418,
+	])("returns safe actionable HTTP %s errors without reading provider bodies", async (status) => {
+		const response = new Response("PRIVATE_PROVIDER_BODY secret-key /Users/private", { status });
+		const intel = service("secret-key", async () => response);
+		const batch = await intel.import([await image()]);
+		const error = await intel.analyze(batch.id).catch((failure: unknown) => failure);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain(`HTTP ${status}`);
+		expect((error as Error).message).not.toMatch(/PRIVATE_PROVIDER_BODY|secret-key|Users/);
+		expect(response.bodyUsed).toBe(false);
+		expect((await intel.get(batch.id)).analysis).toBeNull();
+	});
+
 	it("never accepts repeated, missing or phantom AI image IDs", async () => {
 		const { fetcher } = google((analysis) => ({
 			...analysis,
 			screens: [analysis.screens[0], analysis.screens[0]],
 		}));
 		const intel = service("key", fetcher);
-		const batch = await intel.import([await image(), await image("second.png")]);
+		const batch = await intel.import([await image(), await image("second.png", "png", 321)]);
 		await expect(intel.analyze(batch.id)).rejects.toThrow(/exactly once/i);
 		expect((await intel.get(batch.id)).analysis).toBeNull();
 		expect(await fs.readdir(path.join(root, "screenshot-intel", batch.id))).toEqual([
@@ -229,7 +292,7 @@ describe("ScreenshotIntelService", () => {
 			})),
 		}));
 		const intel = service("key", fetcher);
-		const batch = await intel.import([await image(), await image("second.png")]);
+		const batch = await intel.import([await image(), await image("second.png", "png", 321)]);
 		const result = await intel.analyze(batch.id);
 		const groups = await fs.readdir(result.organizedPath ?? "");
 		expect(groups).toHaveLength(2);

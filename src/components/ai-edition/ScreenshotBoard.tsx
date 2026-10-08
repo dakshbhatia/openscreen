@@ -1,5 +1,15 @@
-import { Check, FolderOpen, Images, LoaderCircle, Sparkles, Upload } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+	Check,
+	ChevronLeft,
+	ChevronRight,
+	FolderOpen,
+	Images,
+	LoaderCircle,
+	Search,
+	Sparkles,
+	Upload,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { DEFAULT_INTEL_SETTINGS, type IntelSettings } from "@/lib/product-intel";
@@ -10,9 +20,14 @@ import styles from "./ScreenshotBoard.module.css";
 interface Props {
 	active: boolean;
 }
-type Screen = NonNullable<ScreenshotBatch["analysis"]>["screens"][number];
 const message = (error: unknown) =>
 	shareText(error instanceof Error ? error.message : "Could not complete this request. Retry.");
+
+function researchLabel(batch: ScreenshotBatch): string {
+	const purposes = [...new Set(batch.analysis?.screens.map((screen) => screen.group) ?? [])];
+	const title = purposes.length ? purposes.slice(0, 2).join(" / ") : batch.title;
+	return `${title} · ${batch.images.length} ${batch.images.length === 1 ? "screen" : "screens"} · ${new Date(batch.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}${batch.analysis ? "" : " · Unanalyzed"}`;
+}
 
 function shareText(value: string): string {
 	return value
@@ -73,6 +88,13 @@ export function ScreenshotBoard({ active }: Props) {
 	const [error, setError] = useState("");
 	const [dragging, setDragging] = useState(false);
 	const [selectedImage, setSelectedImage] = useState<string | null>(null);
+	const [query, setQuery] = useState("");
+	const [groupFilter, setGroupFilter] = useState("");
+	const [contextExpanded, setContextExpanded] = useState(true);
+	const [contextSave, setContextSave] = useState<"saved" | "saving" | "unsaved" | null>(null);
+	const [contextError, setContextError] = useState("");
+	const [summaryExpanded, setSummaryExpanded] = useState(false);
+	const contextInitialized = useRef(false);
 	const working = useRef(false);
 	const more = useRef<HTMLDetailsElement>(null);
 	const keyInput = useRef<HTMLInputElement>(null);
@@ -92,6 +114,10 @@ export function ScreenshotBoard({ active }: Props) {
 			.then(([snapshot, batches]) => {
 				if (stale) return;
 				if (!settingsDirty.current) setSettings(snapshot.settings);
+				if (!contextInitialized.current) {
+					setContextExpanded(!snapshot.settings.productBrief.trim());
+					contextInitialized.current = true;
+				}
 				setConnected(snapshot.connected);
 				setRecent(batches);
 				setBatch((previous) => previous ?? batches[0] ?? null);
@@ -112,23 +138,47 @@ export function ScreenshotBoard({ active }: Props) {
 	function update<K extends keyof IntelSettings>(field: K, value: IntelSettings[K]) {
 		settingsDirty.current = true;
 		settingsVersion.current++;
+		setContextSave("unsaved");
 		setSettings((previous) => ({ ...previous, [field]: value }));
 	}
 	function remember(next: ScreenshotBatch) {
+		if (next.id !== batch?.id) {
+			setQuery("");
+			setGroupFilter("");
+		} else if (
+			groupFilter &&
+			!next.analysis?.screens.some((screen) => screen.group === groupFilter)
+		) {
+			setGroupFilter("");
+		}
+		setSummaryExpanded(false);
 		setBatch(next);
 		setSelectedImage(null);
 		setRecent((previous) => [next, ...previous.filter((item) => item.id !== next.id)]);
 	}
-	async function saveContext() {
+	const saveContext = useCallback(async () => {
 		if (!settingsDirty.current || !loaded || busy) return;
 		const version = settingsVersion.current;
+		setContextSave("saving");
 		try {
 			await nativeBridgeClient.productIntel.saveSettings(settings);
-			if (version === settingsVersion.current) settingsDirty.current = false;
+			if (version === settingsVersion.current) {
+				settingsDirty.current = false;
+				setContextSave("saved");
+				setContextError("");
+			}
 		} catch (err) {
-			setError(message(err));
+			if (version === settingsVersion.current) {
+				setContextSave("unsaved");
+				setContextError(message(err));
+			}
 		}
-	}
+	}, [settings, loaded, busy]);
+	useEffect(() => {
+		if (!active || !loaded || busy || !settingsDirty.current) return;
+		const timer = setTimeout(() => void saveContext(), 450);
+		return () => clearTimeout(timer);
+	}, [active, loaded, busy, saveContext]);
 	async function run(
 		kind: "import" | "analyze" | "organize",
 		action: () => Promise<ScreenshotBatch | null>,
@@ -146,6 +196,8 @@ export function ScreenshotBoard({ active }: Props) {
 					setBusy("analyze");
 					await nativeBridgeClient.productIntel.saveSettings(settings);
 					settingsDirty.current = false;
+					setContextSave("saved");
+					setContextError("");
 					remember(await nativeBridgeClient.screenshotIntel.analyze(result.id));
 				}
 			}
@@ -183,6 +235,8 @@ export function ScreenshotBoard({ active }: Props) {
 		void run("analyze", async () => {
 			await nativeBridgeClient.productIntel.saveSettings(settings);
 			settingsDirty.current = false;
+			setContextSave("saved");
+			setContextError("");
 			return nativeBridgeClient.screenshotIntel.analyze(batch.id);
 		});
 	}
@@ -233,26 +287,41 @@ export function ScreenshotBoard({ active }: Props) {
 			batch.settings.model !== settings.model ||
 			batch.settings.systemPrompt !== settings.systemPrompt);
 	const groups = new Map<string, ScreenshotBatch["images"]>();
+	const allGroups = [...new Set(analysis?.screens.map((screen) => screen.group) ?? [])];
+	const search = query.trim().toLocaleLowerCase();
 	for (const image of batch?.images ?? []) {
-		const group =
-			analysis?.screens.find((screen) => screen.imageId === image.id)?.group ?? "Screenshots";
+		const screen = analysis?.screens.find((screen) => screen.imageId === image.id);
+		const group = screen?.group ?? "Screenshots";
+		if (groupFilter && group !== groupFilter) continue;
+		if (
+			search &&
+			![
+				image.originalName,
+				screen?.label,
+				group,
+				screen?.observation,
+				screen?.hypothesis,
+				screen?.advice,
+			]
+				.filter(Boolean)
+				.join(" ")
+				.toLocaleLowerCase()
+				.includes(search)
+		)
+			continue;
 		groups.set(group, [...(groups.get(group) ?? []), image]);
 	}
+	const visibleImages = [...groups.values()].flat();
 	const evidence = batch?.images.find((image) => image.id === selectedImage);
 	const evidenceScreen = analysis?.screens.find((screen) => screen.imageId === selectedImage);
-	const details = (screen: Screen) => (
-		<details className={styles.evidenceDetails}>
-			<summary>Details</summary>
-			<p>
-				<strong>Observed</strong>
-				{screen.observation}
-			</p>
-			<p>
-				<strong>Hypothesis · {screen.confidence} confidence</strong>
-				{screen.hypothesis}
-			</p>
-		</details>
-	);
+	const evidenceImages = visibleImages.some((image) => image.id === selectedImage)
+		? visibleImages
+		: (batch?.images ?? []);
+	const evidenceIndex = evidenceImages.findIndex((image) => image.id === selectedImage);
+	function navigateEvidence(direction: -1 | 1) {
+		const next = evidenceImages[evidenceIndex + direction];
+		if (next) setSelectedImage(next.id);
+	}
 
 	return (
 		<section
@@ -286,7 +355,11 @@ export function ScreenshotBoard({ active }: Props) {
 		>
 			<div className={`${styles.import} ${dragging ? styles.dragging : ""}`}>
 				<Images size={20} />
-				<span>{batch ? `${batch.images.length} screenshots` : "Drop screenshots here"}</span>
+				<span>
+					{batch
+						? `${batch.images.length} ${batch.images.length === 1 ? "screenshot" : "screenshots"}`
+						: "Drop screenshots here"}
+				</span>
 				<button
 					type="button"
 					className={styles.secondary}
@@ -347,7 +420,7 @@ export function ScreenshotBoard({ active }: Props) {
 								</option>
 								{recent.map((item) => (
 									<option key={item.id} value={item.id}>
-										{item.title}
+										{researchLabel(item)}
 									</option>
 								))}
 							</select>
@@ -417,24 +490,37 @@ export function ScreenshotBoard({ active }: Props) {
 								Organize copies
 							</button>
 						) : null}
-						{analysis?.unknowns.length ? (
-							<details>
-								<summary>Unknowns ({analysis.unknowns.length})</summary>
-								<ul>
-									{analysis.unknowns.map((unknown, index) => (
-										<li key={`${index}-${unknown}`}>{unknown}</li>
-									))}
-								</ul>
-							</details>
-						) : null}
 					</div>
 				</details>
 			</div>
 			<div className={styles.context}>
-				<label>
-					Our product
+				<div className={styles.contextEditor}>
+					<div className={styles.contextHeading}>
+						<button
+							type="button"
+							aria-expanded={contextExpanded}
+							aria-controls="screenshot-product-context"
+							onClick={() => {
+								if (contextExpanded) void saveContext();
+								setContextExpanded((expanded) => !expanded);
+							}}
+						>
+							Our product <span>{contextExpanded ? "Hide" : "Edit"}</span>
+						</button>
+						<span className={styles.saveFeedback} aria-live="polite">
+							{contextSave === "saving"
+								? "Saving…"
+								: contextSave === "saved"
+									? "Saved"
+									: contextSave === "unsaved"
+										? "Unsaved changes"
+										: ""}
+						</span>
+					</div>
 					<textarea
+						id="screenshot-product-context"
 						aria-label="Our product"
+						hidden={!contextExpanded}
 						rows={2}
 						placeholder="Audience, goal, and what makes our approach different"
 						value={settings.productBrief}
@@ -442,7 +528,20 @@ export function ScreenshotBoard({ active }: Props) {
 						onChange={(event) => update("productBrief", event.target.value)}
 						onBlur={() => void saveContext()}
 					/>
-				</label>
+					{!contextExpanded ? (
+						<p className={styles.contextPreview}>
+							{settings.productBrief || "Add audience, goal, and constraints for specific advice."}
+						</p>
+					) : null}
+					{contextError ? (
+						<div role="alert" className={styles.error}>
+							{contextError}
+							<button type="button" disabled={!!busy} onClick={() => void saveContext()}>
+								Retry save
+							</button>
+						</div>
+					) : null}
+				</div>
 				<div className={styles.analyze}>
 					<button
 						type="button"
@@ -497,10 +596,32 @@ export function ScreenshotBoard({ active }: Props) {
 					Context changed. Analyze again to update the advice.
 				</div>
 			) : null}
+			{batch?.duplicatesSkipped ? (
+				<p className={styles.muted}>
+					{batch.duplicatesSkipped} identical{" "}
+					{batch.duplicatesSkipped === 1 ? "image skipped" : "images skipped"} in this import.
+					Originals are unchanged.
+				</p>
+			) : null}
 			{analysis ? (
 				<section className={styles.takeaways} aria-label="Product advice">
 					<div className={styles.resultHeading}>
-						<p>{analysis.summary}</p>
+						<div className={styles.summary}>
+							<h2>Product takeaways</h2>
+							<p className={summaryExpanded ? undefined : styles.summaryPreview}>
+								{analysis.summary}
+							</p>
+							{
+								<button
+									type="button"
+									className={styles.textButton}
+									aria-expanded={summaryExpanded}
+									onClick={() => setSummaryExpanded((expanded) => !expanded)}
+								>
+									{summaryExpanded ? "Less summary" : "Full summary"}
+								</button>
+							}
+						</div>
 						{batch?.organizedPath ? (
 							<button
 								type="button"
@@ -525,12 +646,77 @@ export function ScreenshotBoard({ active }: Props) {
 								>
 									{screen.label}
 								</button>
-								<p>{screen.advice}</p>
-								{details(screen)}
+								<p className={styles.advicePreview}>{screen.advice}</p>
+								<button
+									type="button"
+									className={styles.textButton}
+									onClick={() => setSelectedImage(screen.imageId)}
+									aria-label={`Inspect ${screen.label}`}
+								>
+									Inspect evidence
+								</button>
 							</article>
 						))}
 					</div>
+					{analysis.unknowns.length ? (
+						<details className={styles.unknowns}>
+							<summary>What these screens don’t establish ({analysis.unknowns.length})</summary>
+							<ul>
+								{analysis.unknowns.map((unknown, index) => (
+									<li key={`${index}-${unknown}`}>{unknown}</li>
+								))}
+							</ul>
+						</details>
+					) : null}
 				</section>
+			) : null}
+			{batch && batch.images.length > 1 ? (
+				<div className={styles.findScreens}>
+					<label className={styles.search}>
+						<Search size={14} aria-hidden="true" />
+						<input
+							type="search"
+							aria-label="Search screenshots"
+							placeholder="Find a screen or finding…"
+							value={query}
+							onChange={(event) => setQuery(event.target.value)}
+						/>
+					</label>
+					{allGroups.length > 1 ? (
+						<select
+							aria-label="Screen group"
+							value={groupFilter}
+							onChange={(event) => setGroupFilter(event.target.value)}
+						>
+							<option value="">All groups</option>
+							{allGroups.map((group) => (
+								<option key={group} value={group}>
+									{group}
+								</option>
+							))}
+						</select>
+					) : null}
+					{query || groupFilter ? (
+						<button
+							type="button"
+							className={styles.textButton}
+							onClick={() => {
+								setQuery("");
+								setGroupFilter("");
+							}}
+						>
+							Clear filters
+						</button>
+					) : null}
+					<span className={styles.muted} aria-live="polite">
+						{visibleImages.length} of {batch.images.length}
+					</span>
+				</div>
+			) : null}
+			{batch && !visibleImages.length ? (
+				<p className={styles.emptyResults}>
+					No screens match. Try another term or clear the filters.
+				</p>
 			) : null}
 			<div className={styles.groups}>
 				{[...groups].map(([group, images]) => (
@@ -556,26 +742,6 @@ export function ScreenshotBoard({ active }: Props) {
 											/>
 											<span>{screen?.label ?? image.originalName}</span>
 										</button>
-										<details className={styles.evidenceDetails}>
-											<summary>Details</summary>
-											<p className={styles.muted}>{image.originalName}</p>
-											{screen ? (
-												<>
-													<p>
-														<strong>Observed</strong>
-														{screen.observation}
-													</p>
-													<p>
-														<strong>Hypothesis · {screen.confidence} confidence</strong>
-														{screen.hypothesis}
-													</p>
-													<p>
-														<strong>For our product</strong>
-														{screen.advice}
-													</p>
-												</>
-											) : null}
-										</details>
 									</article>
 								);
 							})}
@@ -589,7 +755,17 @@ export function ScreenshotBoard({ active }: Props) {
 					if (!open) setSelectedImage(null);
 				}}
 			>
-				<DialogContent className={styles.lightbox}>
+				<DialogContent
+					className={styles.lightbox}
+					onKeyDown={(event) => {
+						if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+						if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+							event.preventDefault();
+							event.stopPropagation();
+							navigateEvidence(event.key === "ArrowLeft" ? -1 : 1);
+						}
+					}}
+				>
 					<DialogTitle>{evidenceScreen?.label ?? evidence?.originalName}</DialogTitle>
 					<DialogDescription>
 						{evidenceScreen?.observation ?? "Source screenshot"}
@@ -600,7 +776,47 @@ export function ScreenshotBoard({ active }: Props) {
 							alt={evidenceScreen?.label ?? evidence.originalName}
 						/>
 					) : null}
-					{evidenceScreen ? <p className={styles.muted}>{evidenceScreen.advice}</p> : null}
+					<div className={styles.evidenceNavigation}>
+						<button
+							type="button"
+							className={styles.secondary}
+							aria-label="Previous screenshot"
+							disabled={evidenceIndex <= 0}
+							onClick={() => navigateEvidence(-1)}
+						>
+							<ChevronLeft size={15} /> Previous
+						</button>
+						<span aria-live="polite">
+							{evidenceIndex + 1} of {evidenceImages.length}
+						</span>
+						<button
+							type="button"
+							className={styles.secondary}
+							aria-label="Next screenshot"
+							disabled={evidenceIndex >= evidenceImages.length - 1}
+							onClick={() => navigateEvidence(1)}
+						>
+							Next <ChevronRight size={15} />
+						</button>
+					</div>
+					{evidence ? (
+						<p className={styles.muted}>
+							{evidence.originalName} · {evidence.width} × {evidence.height}
+							{evidenceScreen ? ` · ${evidenceScreen.group}` : ""}
+						</p>
+					) : null}
+					{evidenceScreen ? (
+						<div className={styles.inspectorAdvice}>
+							<p>
+								<strong>Hypothesis · {evidenceScreen.confidence} confidence</strong>
+								{evidenceScreen.hypothesis}
+							</p>
+							<p>
+								<strong>For our product</strong>
+								{evidenceScreen.advice}
+							</p>
+						</div>
+					) : null}
 				</DialogContent>
 			</Dialog>
 		</section>

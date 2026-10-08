@@ -117,9 +117,10 @@ describe("ScreenshotBoard", () => {
 		const advice = screen.getByRole("region", { name: "Product advice" });
 		expect(within(advice).getByText("Advice 3")).toBeVisible();
 		expect(within(advice).queryByText("Advice 4")).not.toBeInTheDocument();
-		expect(screen.getAllByText("Hypothesis 1")[0]).not.toBeVisible();
+		expect(screen.queryByText("Hypothesis 1")).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "View AI name 1" }));
 		expect(screen.getByRole("dialog")).toBeVisible();
+		expect(within(screen.getByRole("dialog")).getByText("Hypothesis 1")).toBeVisible();
 		expect(
 			within(screen.getByRole("dialog")).getByRole("img", { name: "AI name 1" }),
 		).toHaveAttribute("src", expect.stringContaining("Capture%201.png"));
@@ -287,5 +288,122 @@ describe("ScreenshotBoard", () => {
 		);
 		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
 		expect(nativeBridgeClient.productIntel.saveSettings).not.toHaveBeenCalled();
+	});
+	it("autosaves the exact brief without blur and reports a failed save until retry succeeds", async () => {
+		await loadExistingBatch();
+		vi.mocked(nativeBridgeClient.productIntel.saveSettings).mockRejectedValueOnce(
+			new Error("Disk unavailable"),
+		);
+		fireEvent.change(screen.getByLabelText("Our product"), {
+			target: { value: "Our words, untouched!!" },
+		});
+		await screen.findByText("Disk unavailable");
+		expect(screen.getByText("Unsaved changes")).toBeVisible();
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+		fireEvent.blur(screen.getByLabelText("Our product"));
+		await screen.findByText("Saved");
+		expect(screen.queryByText("Disk unavailable")).not.toBeInTheDocument();
+		expect(nativeBridgeClient.productIntel.saveSettings).toHaveBeenLastCalledWith(
+			expect.objectContaining({ productBrief: "Our words, untouched!!" }),
+		);
+	});
+	it("opens a saved product brief compactly and lets the user edit it without rewriting", async () => {
+		vi.mocked(nativeBridgeClient.productIntel.snapshot).mockResolvedValue({
+			settings: { ...DEFAULT_INTEL_SETTINGS, productBrief: "My product — quirks intact." },
+			connected: true,
+			report: null,
+			status: null,
+		});
+		await loadExistingBatch();
+		expect(screen.getByLabelText("Our product")).not.toBeVisible();
+		expect(screen.getByText("My product — quirks intact.", { selector: "p" })).toBeVisible();
+		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
+		expect(screen.getByLabelText("Our product")).toBeVisible();
+		expect(screen.getByLabelText("Our product")).toHaveValue("My product — quirks intact.");
+	});
+	it("searches finding text, intersects group filters and clears back to all screens", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([analyzed]);
+		render(<ScreenshotBoard active />);
+		await screen.findByRole("button", { name: "View AI name 1" });
+		fireEvent.change(screen.getByRole("searchbox", { name: "Search screenshots" }), {
+			target: { value: "Advice 4" },
+		});
+		expect(screen.getByRole("button", { name: "View AI name 4" })).toBeVisible();
+		expect(screen.queryByRole("button", { name: "View AI name 1" })).not.toBeInTheDocument();
+		expect(screen.getByText("1 of 4")).toBeVisible();
+		fireEvent.change(screen.getByLabelText("Screen group"), { target: { value: "Setup" } });
+		expect(screen.getByText(/No screens match/)).toBeVisible();
+		fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+		expect(screen.getByRole("button", { name: "View AI name 1" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "View AI name 4" })).toBeVisible();
+	});
+	it("navigates only filtered evidence with arrows and keeps hypotheses beside the source", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([analyzed]);
+		render(<ScreenshotBoard active />);
+		await screen.findByRole("button", { name: "View AI name 1" });
+		fireEvent.change(screen.getByLabelText("Screen group"), { target: { value: "Workspace" } });
+		fireEvent.click(screen.getByRole("button", { name: "View AI name 3" }));
+		const dialog = screen.getByRole("dialog");
+		expect(within(dialog).getByRole("button", { name: "Previous screenshot" })).toBeDisabled();
+		expect(within(dialog).getByText("Hypothesis 3")).toBeVisible();
+		fireEvent.keyDown(dialog, { key: "ArrowRight" });
+		expect(within(dialog).getByRole("img", { name: "AI name 4" })).toBeVisible();
+		expect(within(dialog).getByRole("button", { name: "Next screenshot" })).toBeDisabled();
+		fireEvent.keyDown(dialog, { key: "ArrowRight" });
+		expect(within(dialog).getByRole("img", { name: "AI name 4" })).toBeVisible();
+		fireEvent.click(within(dialog).getByRole("button", { name: "Previous screenshot" }));
+		expect(within(dialog).getByRole("img", { name: "AI name 3" })).toBeVisible();
+	});
+	it("clears a removed group when reanalysis renames groups in the same batch", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([analyzed]);
+		vi.mocked(nativeBridgeClient.screenshotIntel.analyze).mockResolvedValue({
+			...analyzed,
+			analysis: {
+				...analyzed.analysis!,
+				screens: analyzed.analysis!.screens.map((item) => ({ ...item, group: "Onboarding" })),
+			},
+		});
+		render(<ScreenshotBoard active />);
+		await screen.findByRole("button", { name: "View AI name 1" });
+		fireEvent.change(screen.getByLabelText("Screen group"), { target: { value: "Setup" } });
+		fireEvent.click(screen.getByRole("button", { name: "Analyze screenshots" }));
+		await screen.findByRole("region", { name: "Onboarding" });
+		expect(screen.getByRole("button", { name: "View AI name 4" })).toBeVisible();
+		expect(screen.queryByText(/No screens match/)).not.toBeInTheDocument();
+	});
+	it("keeps full report text available while summary and unknowns expand independently", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([analyzed]);
+		render(<ScreenshotBoard active />);
+		const summary = await screen.findByText("Setup uses focused choices.");
+		const previewClass = summary.className;
+		fireEvent.click(screen.getByRole("button", { name: "Full summary" }));
+		expect(summary.className).not.toBe(previewClass);
+		expect(screen.getByRole("button", { name: "Less summary" })).toHaveAttribute(
+			"aria-expanded",
+			"true",
+		);
+		expect(screen.getByText("Conversion is unknown")).not.toBeVisible();
+		fireEvent.click(
+			screen.getByText("What these screens don’t establish (1)", { selector: "summary" }),
+		);
+		expect(screen.getByText("Conversion is unknown")).toBeVisible();
+		fireEvent.click(screen.getByRole("button", { name: "Inspect AI name 1" }));
+		expect(within(screen.getByRole("dialog")).getByText("Advice 1")).toBeVisible();
+	});
+	it("labels history by purpose and date and explains skipped duplicates", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([
+			{ ...analyzed, duplicatesSkipped: 2 },
+			{ ...batch, id: "batch_00000000-0000-0000-0000-000000000002" },
+		]);
+		render(<ScreenshotBoard active />);
+		await screen.findByText(/2 identical images skipped/);
+		fireEvent.click(screen.getByText("More", { selector: "summary" }));
+		expect(
+			screen.getByRole("option", { name: /Setup \/ Workspace · 4 screens · Oct/ }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("option", { name: /Product screenshots.*Unanalyzed/ }),
+		).toBeInTheDocument();
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
 	});
 });

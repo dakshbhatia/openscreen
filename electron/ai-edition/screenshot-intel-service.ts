@@ -20,6 +20,8 @@ import {
 	screenshotImageSchema,
 } from "../../src/lib/screenshot-intel";
 
+import { geminiHttpError } from "./gemini-errors";
+
 const API = "https://generativelanguage.googleapis.com";
 const MAX_INLINE_BYTES = 12 * 1024 * 1024;
 const MAX_BATCH_JSON_BYTES = 512 * 1024;
@@ -125,6 +127,8 @@ export class ScreenshotIntelService {
 		try {
 			await fs.mkdir(path.join(directory, "images"), { mode: 0o700 });
 			const images: ScreenshotImage[] = [];
+			const seenBytes = new Map<string, Buffer[]>();
+			let duplicatesSkipped = 0;
 			totalBytes = 0;
 			for (const file of paths) {
 				const bytes = await fs.readFile(file);
@@ -138,6 +142,13 @@ export class ScreenshotIntelService {
 						"Screenshots changed during import or exceed the 8 MB image / 24 MB batch limit.",
 					);
 				}
+				const digest = createHash("sha256").update(bytes).digest("hex");
+				const matchingHash = seenBytes.get(digest);
+				if (matchingHash?.some((previous) => previous.equals(bytes))) {
+					duplicatesSkipped++;
+					continue;
+				}
+
 				let metadata: Metadata;
 				try {
 					metadata = await sharp(bytes, imageOptions).metadata();
@@ -161,6 +172,7 @@ export class ScreenshotIntelService {
 				const imageId = `image_${randomUUID()}`;
 				const managedPath = path.join(directory, "images", `${imageId}.${format.extension}`);
 				await fs.writeFile(managedPath, bytes, { mode: 0o600, flag: "wx" });
+				seenBytes.set(digest, [...(matchingHash ?? []), bytes]);
 				images.push(
 					screenshotImageSchema.parse({
 						id: imageId,
@@ -181,6 +193,7 @@ export class ScreenshotIntelService {
 				createdAt: new Date().toISOString(),
 				images,
 				analysis: null,
+				...(duplicatesSkipped ? { duplicatesSkipped } : {}),
 			};
 			await this.write(batch);
 			return batch;
@@ -297,10 +310,7 @@ export class ScreenshotIntelService {
 					}),
 				},
 			);
-			if (!response.ok)
-				throw new Error(
-					`Gemini request failed (${response.status}). Check your key, model and quota, then retry.`,
-				);
+			if (!response.ok) throw geminiHttpError(response.status, "screenshots");
 			const reply = replySchema.parse(await response.json());
 			const output = reply.candidates?.[0]?.content?.parts
 				.filter((part) => !part.thought)

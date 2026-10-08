@@ -74,6 +74,7 @@ export const screenshotBatchSchema = z
 		analyzedAt: z.iso.datetime().optional(),
 		settings: intelSettingsSchema.optional(),
 		organizedPath: z.string().min(1).max(4096).optional(),
+		duplicatesSkipped: z.number().int().nonnegative().optional(),
 	})
 	.superRefine((batch, context) => {
 		if (new Set(batch.images.map((image) => image.id)).size !== batch.images.length) {

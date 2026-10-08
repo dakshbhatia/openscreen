@@ -17,6 +17,21 @@ This is a personal local Mac build. Live Gemini 3.8 Flash analysis passed for a 
 9. AI screen labels and semantic folders applied to organized copies.
 10. Evidence viewers, confidence and unknowns, portable reports, and optional automatic analysis of new recordings.
 
+## Workflow refinements
+
+The next ten changes make the existing research workspace easier to use:
+
+1. Product context autosaves after editing, with saving/saved feedback and retry on disk errors.
+2. A populated product brief opens compactly; Edit reveals the exact original wording.
+3. Summaries and advice use short previews; full text remains available in the summary and evidence inspector.
+4. Search matches screen names, original filenames, observations, hypotheses and advice locally.
+5. Group filters combine with search and can be cleared together.
+6. Evidence has previous/next controls and left/right arrow navigation within the filtered screens.
+7. Unknowns sit beside product takeaways in a collapsed section.
+8. New imports skip byte-identical copies within that batch and show how many were skipped. Existing batches and original files are preserved; visually similar images are retained.
+9. Gemini HTTP errors distinguish access, quota, model/request and temporary service failures without exposing provider response bodies.
+10. History labels include screen purposes, count, date and unanalyzed status without another AI request.
+
 ## Get started on macOS
 
 Use Node 22.22.1, npm 10.9.4, and the GitHub CLI (`gh`). The setup script downloads the upstream v2.0.0 native Mac payload for the current arm64 or x64 architecture, verifies its checksum, and stages it locally. It checks that native sources still match that release; if they have changed, build the native helpers from source instead.

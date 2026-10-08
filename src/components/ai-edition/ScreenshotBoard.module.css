@@ -57,3 +57,31 @@
 .connection { display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--border); padding-bottom: 14px; }
 .connection > small { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; }
 .connection > small svg { color: var(--accent); }
+.contextEditor { min-width: 0; }
+.contextHeading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+.contextHeading > button { display: flex; gap: 10px; align-items: center; color: var(--fg); background: transparent; border: 0; padding: 0; cursor: pointer; font-size: 11px; }
+.contextHeading > button > span, .saveFeedback { font-size: 10px; color: var(--muted); }
+.contextPreview { color: var(--muted); margin: 0; font-size: 11px; line-height: 1.6; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.board textarea[hidden] { display: none; }
+.summary { flex: 1; min-width: 0; }
+.summary h2 { margin: 0 0 7px; font-size: 14px; font-weight: 550; }
+.summary p { margin: 0 0 6px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.summaryPreview, .advicePreview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.textButton { color: var(--muted); font-size: 10px; background: transparent; border: 0; padding: 4px 0; cursor: pointer; text-align: left; }
+.textButton:hover { color: var(--fg); }
+.unknowns { margin: 0 0 20px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.unknowns summary { cursor: pointer; }
+.unknowns ul { padding-left: 20px; max-width: 80ch; }
+.findScreens { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+.search { position: relative; flex: 1; max-width: 360px; }
+.search > svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.search > input { padding-left: 32px; }
+.findScreens > select { width: auto; max-width: 230px; font-size: 11px; }
+.findScreens > span { margin-left: auto; white-space: nowrap; }
+.emptyResults { padding: 30px 0; color: var(--muted); font-size: 12px; text-align: center; }
+.evidenceNavigation { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.evidenceNavigation > span { font-size: 11px; color: var(--muted); }
+.inspectorAdvice { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.inspectorAdvice p { margin: 0; }
+.inspectorAdvice strong { display: block; color: var(--muted); font-size: 11px; font-weight: 500; margin-bottom: 5px; }
+@media (max-width: 760px) { .findScreens { flex-wrap: wrap; } .search { flex-basis: 100%; max-width: none; } .findScreens > select { flex: 1; max-width: none; } .inspectorAdvice { grid-template-columns: minmax(0, 1fr); gap: 14px; } }

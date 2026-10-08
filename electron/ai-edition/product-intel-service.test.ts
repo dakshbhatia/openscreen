@@ -153,6 +153,23 @@ describe("ProductIntelService", () => {
 		expect(requests.at(-1)?.init?.method).toBe("DELETE");
 		expect(JSON.stringify(report)).not.toContain("test-key");
 	});
+	it.each([
+		401, 403, 429, 404, 400, 503, 418,
+	])("returns safe HTTP %s recovery guidance and still deletes video uploads", async (status) => {
+		const base = google();
+		const response = new Response("PRIVATE_PROVIDER_BODY secret-key /Users/private", { status });
+		const intel = service("secret-key", async (url, init) =>
+			String(url).includes(":generateContent") ? response : base.fetcher(url, init),
+		);
+		const error = await intel.analyze("proj_1").catch((failure: unknown) => failure);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain(`HTTP ${status}`);
+		expect((error as Error).message).not.toMatch(/PRIVATE_PROVIDER_BODY|secret-key|Users/);
+		expect(response.bodyUsed).toBe(false);
+		expect(await intel.getReport("proj_1")).toBeNull();
+		expect(base.requests.at(-1)?.init?.method).toBe("DELETE");
+	});
+
 	it("enforces local array limits even though the wire schema omits them", async () => {
 		const base = google();
 		const fetcher: typeof fetch = async (url, init) => {

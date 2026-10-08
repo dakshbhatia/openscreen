@@ -99,6 +99,28 @@ describe("screenshot intelligence contract", () => {
 		).toThrow();
 		expect(() => screenshotBatchSchema.parse({ ...batch, apiKey: "private" })).toThrow();
 	});
+	it("keeps duplicate counts optional for old reports and validates new counts", () => {
+		const batch = {
+			id: "batch_00000000-0000-0000-0000-000000000001",
+			title: "Screens",
+			createdAt: "2026-10-08T14:15:00.000Z",
+			images,
+			analysis,
+		};
+		expect(screenshotBatchSchema.parse(batch)).not.toHaveProperty("duplicatesSkipped");
+		expect(screenshotBatchSchema.parse({ ...batch, duplicatesSkipped: 0 }).duplicatesSkipped).toBe(
+			0,
+		);
+		expect(screenshotBatchSchema.parse({ ...batch, duplicatesSkipped: 2 }).duplicatesSkipped).toBe(
+			2,
+		);
+		for (const count of [-1, 0.5, Infinity, "2"]) {
+			expect(screenshotBatchSchema.safeParse({ ...batch, duplicatesSkipped: count }).success).toBe(
+				false,
+			);
+		}
+	});
+
 	it("rejects traversal and unrelated IDs", () => {
 		for (const id of ["../settings", "/tmp/batch", "batch_../../secrets", "settings", "batch_1"]) {
 			expect(screenshotBatchIdSchema.safeParse(id).success).toBe(false);
