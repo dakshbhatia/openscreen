@@ -609,9 +609,12 @@ which is far too late to explain a wait that is already happening.
 The request takes a raw `Float32Array` of mono 16 kHz PCM and an optional
 ISO 639-1 `language` code; `"auto"` or absent leaves detection to Whisper.
 An optional `prompt` carries the project's names and terms
-(`project.vocabulary`, the media stage's "Names and terms" field, issue #1023):
-the helper sets it as whisper's `initial_prompt` with `carry_initial_prompt`, so
-every 30 s window of every chunk is conditioned on it.
+(`project.vocabulary`, the media stage's "Names and terms" field, issue #1023).
+`whisperServer.ts` sends it framed as `Glossary: <terms>.`, and the helper sets
+that as whisper's `initial_prompt` with `carry_initial_prompt`, so every 30 s
+window of every chunk is conditioned on it. The framing is not cosmetic: whisper
+reads a bare list as text already spoken, and dropped the opening words that
+contained the terms.
 Status events fan out on a separate channel
 (`SttStatusEvent`, `phase: "model" | "transcribe"`) so the renderer can
 drive a "downloading model" / "transcribing" indicator without holding open

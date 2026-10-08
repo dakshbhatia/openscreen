@@ -496,8 +496,13 @@ export class WhisperServerManager {
 		form.set("file", blob, path.basename(opts.wavPath));
 		form.set("response_format", "verbose_json");
 		form.set("language", opts.language && opts.language !== "auto" ? opts.language : "auto");
-		const prompt = opts.prompt?.trim();
-		if (prompt) form.set("prompt", prompt);
+		const prompt = opts.prompt?.trim().replace(/\.+$/, "");
+		// Framed as a glossary, not handed over bare. Whisper reads its prompt as the
+		// text that came just before, so a bare list read as already said: the opening
+		// words that held those terms were dropped ("Welcome to this release
+		// candidate…" lost its first five words) and a list of names turned the whole
+		// transcript into Title Case. Measured in #1023.
+		if (prompt) form.set("prompt", `Glossary: ${prompt}.`);
 		let res: Response;
 		try {
 			res = await fetch(url, {

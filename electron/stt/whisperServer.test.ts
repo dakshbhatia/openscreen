@@ -310,9 +310,9 @@ describe("WhisperServerManager", () => {
 			expect(sent).toBe("fr");
 		});
 
-		it("sends the project's names and terms as the prompt field, trimmed", async () => {
-			const sent = await captureFormField("auto", "  OpenScreen, whisper.cpp \n", "prompt");
-			expect(sent).toBe("OpenScreen, whisper.cpp");
+		it("sends the project's names and terms as a glossary prompt", async () => {
+			const sent = await captureFormField("auto", "  OpenScreen, whisper.cpp. \n", "prompt");
+			expect(sent).toBe("Glossary: OpenScreen, whisper.cpp.");
 		});
 
 		it("sends no prompt field when the names and terms are blank", async () => {
