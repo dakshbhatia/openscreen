@@ -426,6 +426,14 @@ jobs:
               # xvfb-run folds the command's stderr into stdout, so the stderr
               # capture is empty and every milestone lands in the other file.
               grep -a milestone "/tmp/sources.$i.out" || echo "  (none at all)"
+            elif [ "$RC" -eq 0 ] && ! python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))['displays'] else 1)" "/tmp/sources.$i.json"; then
+              # Exit 0 is not an answer on its own. Electron 43 settles the
+              # combined screen+window call after its 3s ready timer with the
+              # screen dropped, so `displays: []` is #462's other face, and
+              # Xvfb always has one screen to report.
+              FAILED=$((FAILED + 1))
+              echo "returned no display (#462). Last milestone:"
+              grep -a milestone "/tmp/sources.$i.out" | tail -1 || echo "  (none)"
             elif [ "$RC" -eq 0 ]; then
               OK=$((OK + 1))
               LAST_OK="/tmp/sources.$i.json"
@@ -460,10 +468,8 @@ jobs:
           PY
           fi
 
-          # Noted, not acted on. Enumeration is flaky here and the export
-          # assertion below is the more
-          # important question; a flaky attempt costs an annotation rather than
-          # the answer. Verdict at the end, once both have had their say.
+          # Annotated here, decided at the end: export runs either way, so a
+          # failed enumeration cannot hide whether the addon works.
           if [ "$HUNG" -gt 0 ]; then
             echo "::warning::openscreen sources had to be killed on $HUNG of $ATTEMPTS attempts. Check the milestones above for how far it got before the outer bound fired."
           fi
@@ -590,21 +596,18 @@ jobs:
           # flaky must not hide whether export works, which is the whole point of
           # having packaged the compositor addon.
           #
-          # The gate is "did enumeration ever answer" and "does export work", not
-          # "did all five attempts pass". Requiring FAILED -eq 0 made the job red
-          # by construction: the standing numbers on this runner are 1/5, 3/5 and
-          # 4/5 ok, so a run where export is perfect and four enumerations succeed
-          # still failed. A post-merge check that is red by design is one that gets
-          # muted, which costs more than the flakiness it was reporting. The
-          # per-attempt warnings above keep that flakiness visible without letting
-          # it decide the build; tighten this to $ATTEMPTS once the capture failure
-          # is understood and fixed.
+          # Every enumeration must answer with a display, and export must work.
+          # The gate used to be "did enumeration ever answer", because the call
+          # failed on 1 to 4 attempts in 5 for a reason nobody had found. #462
+          # found it: asking for screens and windows in one getSources call is
+          # what fails under X11, and the get-sources handler now asks one type
+          # at a time (under Xvfb: 0 failures in 32 runs, against 7 in 16
+          # combined). A flake left after that is a regression, not runner luck.
           #
-          # Export, on the other hand, is a hard gate on every trigger again. It no
-          # longer depends on a capability this host does not have, so there is
-          # nothing left to excuse: if it fails now, the package is broken.
+          # Export is a hard gate on every trigger. It does not depend on a
+          # capability this host lacks, so if it fails, the package is broken.
           echo "=== verdict: enumeration $OK/$ATTEMPTS ok, export $EXPORT_OK, $RUN_CLI_N run_cli invocations ==="
-          if [ "$EXPORT_OK" -ne 1 ] || [ "$OK" -eq 0 ]; then
+          if [ "$EXPORT_OK" -ne 1 ] || [ "$OK" -ne "$ATTEMPTS" ]; then
             exit 1
           fi
 
