@@ -124,6 +124,21 @@ describe("keepTimeByWallClock", () => {
 		expect(media.currentTime).toBe(0);
 	});
 
+	it("still stops at the end when the duration is learned while playing (a MediaRecorder WebM)", async () => {
+		const media = clocked();
+		media.duration = Number.NaN;
+		const seen = events(media);
+		await media.play();
+		media.duration = 2;
+		media.dispatchEvent(new Event("durationchange"));
+		nowMs = 2000;
+		vi.advanceTimersByTime(2000);
+		await Promise.resolve();
+		expect(media.paused).toBe(true);
+		expect(media.ended).toBe(true);
+		expect(seen).toEqual(["play", "playing", "pause", "ended"]);
+	});
+
 	it("refuses a rate the element refuses, and keeps its own", async () => {
 		const media = clocked();
 		await media.play();

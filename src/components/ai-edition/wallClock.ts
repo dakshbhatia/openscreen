@@ -133,4 +133,7 @@ export function keepTimeByWallClock(
 		rate = rateOf.get?.call(element);
 		anchor(0);
 	});
+	// A MediaRecorder WebM can learn its duration after the clock is installed: the end timer
+	// needs it, or playback runs on past the end without ever saying `ended`.
+	element.addEventListener("durationchange", () => anchor(position()));
 }
