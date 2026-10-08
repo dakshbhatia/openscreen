@@ -22,6 +22,8 @@ import {
 	screenshotDecisionSchema,
 	screenshotImageIdSchema,
 	screenshotImageSchema,
+	screenshotReadoutInsightSchema,
+	screenshotReadoutSchema,
 	screenshotUnderstandingSchema,
 } from "../../src/lib/screenshot-intel";
 
@@ -33,13 +35,25 @@ const API = "https://generativelanguage.googleapis.com";
 const currentAnalysisSchema = screenshotAnalysisSchema.extend({
 	decisions: z.array(screenshotDecisionSchema).max(5),
 	understanding: screenshotUnderstandingSchema,
+	screens: z
+		.array(screenshotAnalysisSchema.shape.screens.element.required({ purpose: true }))
+		.min(1)
+		.max(MAX_SCREENSHOT_IMAGES),
+	readout: screenshotReadoutSchema,
+});
+const geminiReadoutInsightSchema = screenshotReadoutInsightSchema.extend({
+	evidenceImageIds: z.array(screenshotImageIdSchema),
 });
 const geminiAnalysisSchema = currentAnalysisSchema.extend({
-	screens: z.array(screenshotAnalysisSchema.shape.screens.element),
+	screens: z.array(currentAnalysisSchema.shape.screens.element),
 	unknowns: z.array(screenshotAnalysisSchema.shape.unknowns.element),
 	decisions: z.array(
 		screenshotDecisionSchema.extend({ evidenceImageIds: z.array(screenshotImageIdSchema) }),
 	),
+	readout: z.strictObject({
+		strengths: z.array(geminiReadoutInsightSchema),
+		frictions: z.array(geminiReadoutInsightSchema),
+	}),
 });
 
 const MAX_INLINE_BYTES = 12 * 1024 * 1024;

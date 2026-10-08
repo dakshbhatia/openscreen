@@ -7,10 +7,13 @@ import {
 	type ScreenshotAnalysis,
 	type ScreenshotDecision,
 	type ScreenshotImage,
+	type ScreenshotReadoutInsight,
 	screenshotAnalysisSchema,
 	screenshotBatchIdSchema,
 	screenshotBatchSchema,
 	screenshotDecisionSchema,
+	screenshotReadoutInsightSchema,
+	screenshotReadoutSchema,
 	screenshotUnderstandingSchema,
 } from "./screenshot-intel";
 
@@ -56,6 +59,15 @@ const decision: ScreenshotDecision = {
 	tradeoff: "Less setup can reduce early orientation.",
 	confidence: "medium",
 	evidenceImageIds: images.map((image) => image.id),
+};
+
+const insight: ScreenshotReadoutInsight = {
+	title: "A named place for shared work",
+	reason:
+		"The workspace name gives teammates a recognizable place to return to when resuming shared work.",
+	basis: "inferred",
+	confidence: "medium",
+	evidenceImageIds: [images[0].id],
 };
 
 describe("screenshot intelligence contract", () => {
@@ -138,6 +150,8 @@ describe("screenshot intelligence contract", () => {
 	it("keeps older analyses unchanged and preserves ranked collection decisions", () => {
 		expect(parseScreenshotAnalysis(analysis, images)).not.toHaveProperty("decisions");
 		expect(parseScreenshotAnalysis(analysis, images)).not.toHaveProperty("understanding");
+		expect(parseScreenshotAnalysis(analysis, images)).not.toHaveProperty("readout");
+		expect(parseScreenshotAnalysis(analysis, images).screens[0]).not.toHaveProperty("purpose");
 		const second = {
 			...decision,
 			title: "Investigate naming needs",
@@ -147,6 +161,79 @@ describe("screenshot intelligence contract", () => {
 			parseScreenshotAnalysis({ ...analysis, decisions: [decision, second] }, images).decisions,
 		).toEqual([decision, second]);
 		expect(parseScreenshotAnalysis({ ...analysis, decisions: [] }, images).decisions).toEqual([]);
+	});
+	it("accepts concise screen purposes and empty readout arrays without inventing insights", () => {
+		const purpose =
+			"This form lets a user name the workspace so shared work has a recognizable home.";
+		const current = {
+			...analysis,
+			screens: analysis.screens.map((screen) => ({ ...screen, purpose })),
+			readout: { strengths: [], frictions: [] },
+		};
+		expect(parseScreenshotAnalysis(current, images).screens[0].purpose).toBe(purpose);
+		expect(parseScreenshotAnalysis(current, images).readout).toEqual({
+			strengths: [],
+			frictions: [],
+		});
+		for (const value of ["", "x".repeat(601)]) {
+			expect(
+				screenshotAnalysisSchema.safeParse({
+					...current,
+					screens: [{ ...current.screens[0], purpose: value }],
+				}).success,
+			).toBe(false);
+		}
+	});
+	it("validates readout citations in both model parsing and persisted batches", () => {
+		const batch = {
+			id: "batch_00000000-0000-0000-0000-000000000001",
+			title: "Screens",
+			createdAt: "2026-10-08T14:15:00.000Z",
+			images,
+		};
+		const readout = { strengths: [insight], frictions: [] };
+		expect(parseScreenshotAnalysis({ ...analysis, readout }, images).readout).toEqual(readout);
+		expect(
+			screenshotBatchSchema.parse({ ...batch, analysis: { ...analysis, readout } }).analysis
+				?.readout,
+		).toEqual(readout);
+		for (const evidenceImageIds of [
+			[],
+			[images[0].id, images[0].id],
+			["image_00000000-0000-0000-0000-000000000099"],
+		]) {
+			const invalid = { strengths: [{ ...insight, evidenceImageIds }], frictions: [] };
+			expect(() => parseScreenshotAnalysis({ ...analysis, readout: invalid }, images)).toThrow();
+			expect(
+				screenshotBatchSchema.safeParse({ ...batch, analysis: { ...analysis, readout: invalid } })
+					.success,
+			).toBe(false);
+		}
+	});
+	it("caps readout text, insight counts and unique evidence references locally", () => {
+		for (const field of ["strengths", "frictions"] as const) {
+			expect(
+				screenshotReadoutSchema.safeParse({
+					strengths: [],
+					frictions: [],
+					[field]: Array.from({ length: 4 }, () => insight),
+				}).success,
+			).toBe(false);
+		}
+		for (const value of [
+			{ ...insight, title: "x".repeat(141) },
+			{ ...insight, reason: "x".repeat(901) },
+			{ ...insight, basis: "proven" },
+			{ ...insight, confidence: "certain" },
+			{
+				...insight,
+				evidenceImageIds: Array.from(
+					{ length: 25 },
+					(_, index) => `image_00000000-0000-0000-0000-${String(index).padStart(12, "0")}`,
+				),
+			},
+		])
+			expect(screenshotReadoutInsightSchema.safeParse(value).success).toBe(false);
 	});
 	it("validates decision limits and evidence IDs in both API parsing and persisted reports", () => {
 		const batch = {
@@ -248,5 +335,15 @@ describe("screenshot intelligence contract", () => {
 		expect(SCREENSHOT_ANALYST_PROMPT).toContain("tradeoff");
 		expect(SCREENSHOT_ANALYST_PROMPT).toContain("without inventing metrics");
 		expect(SCREENSHOT_ANALYST_PROMPT).toContain("untrusted research data");
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain(
+			"product and job each need only one plain sentence",
+		);
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain("purpose in one sentence");
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain("prefer one or two strongly supported insights");
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain("one-sentence reason");
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain("Empty arrays are appropriate");
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain("Treat friction risks as hypotheses");
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain("never invent user failure");
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain("beautiful, good or bad are not reasons");
 	});
 });

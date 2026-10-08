@@ -98,3 +98,23 @@
 .understanding dl { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 6px 12px; padding: 8px 0; max-width: 85ch; }
 .understanding dd { color: var(--fg); margin: 0; }
 .muted a { color: var(--accent); text-decoration: underline; }
+.summary p[hidden] { display: none; }
+.briefUnderstanding { margin: 12px 0 16px; max-width: 90ch; }
+.briefUnderstanding > p { margin: 8px 0; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.briefUnderstanding > p > strong { display: block; color: var(--muted); font-size: 10px; font-weight: 500; margin-bottom: 2px; }
+.briefUnderstanding .understanding { margin: 8px 0 0; }
+.readout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0 20px; }
+.readout > section { min-width: 0; border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: color-mix(in srgb, var(--fg) 2%, transparent); }
+.readout h3, .nextStepHeading { margin: 0; font-size: 12px; font-weight: 550; }
+.insight { margin-top: 12px; }
+.insight + .insight { padding-top: 12px; border-top: 1px solid var(--border); }
+.insight h4 { font-size: 12px; font-weight: 550; margin: 0 0 6px; line-height: 1.5; }
+.insight p { font-size: 12px; line-height: 1.65; margin: 0 0 7px; overflow-wrap: anywhere; }
+.insight > small { display: block; color: var(--muted); font-size: 10px; text-transform: capitalize; }
+.insight > .evidenceLink { margin-top: 7px; }
+.advice.nextStep { grid-template-columns: minmax(0, 1fr); margin-top: 8px; margin-bottom: 10px; }
+.nextStep .decision > p { max-width: 90ch; }
+.purposePreview { margin: 0; padding: 0 5px 5px; color: var(--muted); font-size: 10px; line-height: 1.6; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.inspectorPurpose { margin: 0; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.inspectorPurpose > strong { display: block; color: var(--muted); font-size: 11px; font-weight: 500; margin-bottom: 5px; }
+@media (max-width: 760px) { .readout { grid-template-columns: minmax(0, 1fr); } }

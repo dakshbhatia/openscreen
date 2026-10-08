@@ -13,7 +13,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { DEFAULT_INTEL_SETTINGS, type IntelSettings } from "@/lib/product-intel";
-import type { ScreenshotBatch, ScreenshotDecision } from "@/lib/screenshot-intel";
+import type {
+	ScreenshotBatch,
+	ScreenshotDecision,
+	ScreenshotReadoutInsight,
+} from "@/lib/screenshot-intel";
 import { nativeBridgeClient } from "@/native/client";
 import styles from "./ScreenshotBoard.module.css";
 
@@ -36,6 +40,16 @@ function shareText(value: string): string {
 		.replace(/(?:[A-Za-z]:\\|\\\\)[^\s<>"`]+/g, "[redacted]")
 		.replace(/(?<![\w:/])\/(?:Users|home|private|Volumes|tmp)\/[^\s<>"`]+/g, "[redacted]");
 }
+function shareInsight(insight: ScreenshotReadoutInsight) {
+	return {
+		title: shareText(insight.title),
+		reason: shareText(insight.reason),
+		basis: insight.basis,
+		confidence: insight.confidence,
+		evidenceImageIds: insight.evidenceImageIds,
+	};
+}
+
 function shareableBatch(batch: ScreenshotBatch) {
 	return {
 		id: batch.id,
@@ -76,6 +90,12 @@ function shareableBatch(batch: ScreenshotBatch) {
 								confidence: batch.analysis.understanding.confidence,
 							}
 						: undefined,
+					readout: batch.analysis.readout
+						? {
+								strengths: batch.analysis.readout.strengths.map(shareInsight),
+								frictions: batch.analysis.readout.frictions.map(shareInsight),
+							}
+						: undefined,
 					decisions: batch.analysis.decisions?.map((decision) => ({
 						title: shareText(decision.title),
 						recommendation: decision.recommendation,
@@ -90,6 +110,7 @@ function shareableBatch(batch: ScreenshotBatch) {
 						imageId: screen.imageId,
 						label: shareText(screen.label),
 						group: shareText(screen.group),
+						purpose: screen.purpose ? shareText(screen.purpose) : undefined,
 						observation: shareText(screen.observation),
 						hypothesis: shareText(screen.hypothesis),
 						advice: shareText(screen.advice),
@@ -275,6 +296,13 @@ export function ScreenshotBoard({ active }: Props) {
 	function download(format: "markdown" | "json") {
 		if (!batch) return;
 		const shared = shareableBatch(batch);
+		const evidenceLabels = (ids: string[]) =>
+			ids
+				.map((id) => {
+					const label = shared.analysis?.screens.find((screen) => screen.imageId === id)?.label;
+					return label ? `${id} (${label})` : id;
+				})
+				.join(", ");
 		const text =
 			format === "json"
 				? JSON.stringify(shared, null, 2)
@@ -305,6 +333,24 @@ export function ScreenshotBoard({ active }: Props) {
 									`Confidence: ${shared.analysis.understanding.confidence}`,
 								]
 							: []),
+						...(shared.analysis?.readout
+							? [
+									"## Works well",
+									...shared.analysis.readout.strengths.flatMap((insight) => [
+										`### ${insight.title}`,
+										insight.reason,
+										`${insight.basis} · ${insight.confidence} confidence`,
+										`Evidence: ${evidenceLabels(insight.evidenceImageIds)}`,
+									]),
+									"## Creates friction",
+									...shared.analysis.readout.frictions.flatMap((insight) => [
+										`### ${insight.title}`,
+										insight.reason,
+										`${insight.basis} · ${insight.confidence} confidence`,
+										`Evidence: ${evidenceLabels(insight.evidenceImageIds)}`,
+									]),
+								]
+							: []),
 						...(shared.analysis?.decisions?.flatMap((decision) => [
 							`## ${decision.recommendation}: ${decision.title}`,
 							`Why: ${decision.rationale}`,
@@ -312,11 +358,12 @@ export function ScreenshotBoard({ active }: Props) {
 							`Experiment: ${decision.experiment}`,
 							`Tradeoff: ${decision.tradeoff}`,
 							`Confidence: ${decision.confidence}`,
-							`Evidence: ${decision.evidenceImageIds.join(", ")}`,
+							`Evidence: ${evidenceLabels(decision.evidenceImageIds)}`,
 						]) ?? []),
 						...(shared.analysis?.screens.flatMap((screen) => [
 							`## ${screen.group} / ${screen.label}`,
 							`Screen ID: ${screen.imageId}`,
+							...(screen.purpose ? [`Purpose: ${screen.purpose}`] : []),
 							`Observed: ${screen.observation}`,
 							`Hypothesis (${screen.confidence} confidence): ${screen.hypothesis}`,
 							`For our product: ${screen.advice}`,
@@ -337,6 +384,7 @@ export function ScreenshotBoard({ active }: Props) {
 		setTimeout(() => URL.revokeObjectURL(url), 1000);
 	}
 	const analysis = batch?.analysis;
+	const decisionLimit = analysis?.readout ? 1 : 3;
 	const contextChanged =
 		batch?.settings &&
 		(batch.settings.productBrief !== settings.productBrief ||
@@ -357,10 +405,14 @@ export function ScreenshotBoard({ active }: Props) {
 			![
 				image.originalName,
 				screen?.label,
+				screen?.purpose,
 				group,
 				screen?.observation,
 				screen?.hypothesis,
 				screen?.advice,
+				...[...(analysis?.readout?.strengths ?? []), ...(analysis?.readout?.frictions ?? [])]
+					.filter((insight) => insight.evidenceImageIds.includes(image.id))
+					.flatMap((insight) => [insight.title, insight.reason]),
 				...(analysis?.decisions
 					?.filter((decision) => decision.evidenceImageIds.includes(image.id))
 					.flatMap((decision) => [
@@ -396,6 +448,27 @@ export function ScreenshotBoard({ active }: Props) {
 		setDecisionEvidenceIds(ids);
 		setSelectedImage(imageId);
 	}
+	function insightCard(insight: ScreenshotReadoutInsight, index: number) {
+		return (
+			<article key={`${index}-${insight.title}`} className={styles.insight}>
+				<h4>{insight.title}</h4>
+				<p>{insight.reason}</p>
+				<small>
+					{insight.basis} · {insight.confidence} confidence
+				</small>
+				<button
+					type="button"
+					className={styles.evidenceLink}
+					onClick={() => openEvidence(insight.evidenceImageIds[0], insight.evidenceImageIds)}
+					aria-label={`Evidence for ${insight.title}`}
+				>
+					Inspect {insight.evidenceImageIds.length}{" "}
+					{insight.evidenceImageIds.length === 1 ? "source screen" : "source screens"}
+				</button>
+			</article>
+		);
+	}
+
 	function decisionCard(decision: ScreenshotDecision, index: number) {
 		return (
 			<article key={`${index}-${decision.title}`} className={styles.decision}>
@@ -732,11 +805,17 @@ export function ScreenshotBoard({ active }: Props) {
 				</p>
 			) : null}
 			{analysis ? (
-				<section className={styles.takeaways} aria-label="Product advice">
+				<section
+					className={styles.takeaways}
+					aria-label={analysis.readout ? "Product brief" : "Product advice"}
+				>
 					<div className={styles.resultHeading}>
 						<div className={styles.summary}>
-							<h2>Product takeaways</h2>
-							<p className={summaryExpanded ? undefined : styles.summaryPreview}>
+							<h2>{analysis.readout ? "Product brief" : "Product takeaways"}</h2>
+							<p
+								hidden={!!analysis.readout && !summaryExpanded}
+								className={summaryExpanded ? undefined : styles.summaryPreview}
+							>
 								{analysis.summary}
 							</p>
 							{
@@ -780,7 +859,7 @@ export function ScreenshotBoard({ active }: Props) {
 							)}
 						</p>
 					) : null}
-					{analysis.understanding ? (
+					{analysis.understanding && !analysis.readout ? (
 						<details className={styles.understanding}>
 							<summary>
 								Working understanding · {analysis.understanding.confidence} confidence
@@ -795,37 +874,81 @@ export function ScreenshotBoard({ active }: Props) {
 							</dl>
 						</details>
 					) : null}
-					<div className={styles.advice}>
+					{analysis.readout ? (
+						<>
+							{analysis.understanding ? (
+								<div className={styles.briefUnderstanding}>
+									<p>
+										<strong>Product</strong>
+										{analysis.understanding.product}
+									</p>
+									<p>
+										<strong>Job to be done</strong>
+										{analysis.understanding.job}
+									</p>
+									<details className={styles.understanding}>
+										<summary>Audience & confidence</summary>
+										<p>
+											{analysis.understanding.audience} · {analysis.understanding.confidence}{" "}
+											confidence
+										</p>
+									</details>
+								</div>
+							) : null}
+							<div className={styles.readout}>
+								<section aria-label="Works well">
+									<h3>Works well</h3>
+									{analysis.readout.strengths.length ? (
+										analysis.readout.strengths.slice(0, 3).map(insightCard)
+									) : (
+										<p className={styles.muted}>No supported strengths in these screens.</p>
+									)}
+								</section>
+								<section aria-label="Creates friction">
+									<h3>Creates friction</h3>
+									{analysis.readout.frictions.length ? (
+										analysis.readout.frictions.slice(0, 3).map(insightCard)
+									) : (
+										<p className={styles.muted}>No supported friction in these screens.</p>
+									)}
+								</section>
+							</div>
+							<h3 className={styles.nextStepHeading}>Recommended next step</h3>
+						</>
+					) : null}
+					<div className={`${styles.advice}${analysis.readout ? ` ${styles.nextStep}` : ""}`}>
 						{analysis.decisions
-							? analysis.decisions.slice(0, showAllDecisions ? 5 : 3).map(decisionCard)
-							: analysis.screens.slice(0, 3).map((screen) => (
-									<article key={screen.imageId}>
-										<button
-											type="button"
-											className={styles.evidenceLink}
-											onClick={() => openEvidence(screen.imageId)}
-										>
-											{screen.label}
-										</button>
-										<p className={styles.advicePreview}>{screen.advice}</p>
-										<button
-											type="button"
-											className={styles.textButton}
-											onClick={() => openEvidence(screen.imageId)}
-											aria-label={`Inspect ${screen.label}`}
-										>
-											Inspect evidence
-										</button>
-									</article>
-								))}
+							? analysis.decisions.slice(0, showAllDecisions ? 5 : decisionLimit).map(decisionCard)
+							: !analysis.readout
+								? analysis.screens.slice(0, 3).map((screen) => (
+										<article key={screen.imageId}>
+											<button
+												type="button"
+												className={styles.evidenceLink}
+												onClick={() => openEvidence(screen.imageId)}
+											>
+												{screen.label}
+											</button>
+											<p className={styles.advicePreview}>{screen.advice}</p>
+											<button
+												type="button"
+												className={styles.textButton}
+												onClick={() => openEvidence(screen.imageId)}
+												aria-label={`Inspect ${screen.label}`}
+											>
+												Inspect evidence
+											</button>
+										</article>
+									))
+								: null}
 					</div>
-					{analysis.decisions && !analysis.decisions.length ? (
+					{(analysis.readout || analysis.decisions) && !analysis.decisions?.length ? (
 						<p className={styles.muted}>
 							No supported product decision yet. Inspect the screens and unknowns before choosing an
 							experiment.
 						</p>
 					) : null}
-					{analysis.decisions && analysis.decisions.length > 3 ? (
+					{analysis.decisions && analysis.decisions.length > decisionLimit ? (
 						<button
 							type="button"
 							className={styles.textButton}
@@ -834,7 +957,7 @@ export function ScreenshotBoard({ active }: Props) {
 						>
 							{showAllDecisions
 								? "Fewer decisions"
-								: `More decisions (${analysis.decisions.length - 3})`}
+								: `More decisions (${analysis.decisions.length - decisionLimit})`}
 						</button>
 					) : null}
 					{analysis.unknowns.length ? (
@@ -920,6 +1043,9 @@ export function ScreenshotBoard({ active }: Props) {
 												loading="lazy"
 											/>
 											<span>{screen?.label ?? image.originalName}</span>
+											{screen?.purpose ? (
+												<p className={styles.purposePreview}>{screen.purpose}</p>
+											) : null}
 										</button>
 									</article>
 								);
@@ -966,7 +1092,11 @@ export function ScreenshotBoard({ active }: Props) {
 							<ChevronLeft size={15} /> Previous
 						</button>
 						<span aria-live="polite">
-							{decisionEvidenceIds ? "Decision evidence · " : ""}
+							{decisionEvidenceIds
+								? analysis?.readout
+									? "Cited evidence · "
+									: "Decision evidence · "
+								: ""}
 							{evidenceIndex + 1} of {evidenceImages.length}
 						</span>
 						<button
@@ -983,6 +1113,12 @@ export function ScreenshotBoard({ active }: Props) {
 						<p className={styles.muted}>
 							{evidence.originalName} · {evidence.width} × {evidence.height}
 							{evidenceScreen ? ` · ${evidenceScreen.group}` : ""}
+						</p>
+					) : null}
+					{evidenceScreen?.purpose ? (
+						<p className={styles.inspectorPurpose}>
+							<strong>Purpose</strong>
+							{evidenceScreen.purpose}
 						</p>
 					) : null}
 					{evidenceScreen ? (

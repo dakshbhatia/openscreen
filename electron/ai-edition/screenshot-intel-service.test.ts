@@ -57,6 +57,8 @@ function google(transform: (analysis: ScreenshotAnalysis) => unknown = (analysis
 				imageId,
 				label: "Create workspace",
 				group: "Setup",
+				purpose:
+					"The form lets a user name a workspace so shared projects have a recognizable home.",
 				observation: "A name field is visible.",
 				hypothesis: "A team name may organize shared work.",
 				advice:
@@ -69,6 +71,18 @@ function google(transform: (analysis: ScreenshotAnalysis) => unknown = (analysis
 				audience: "Possibly teams; not established",
 				job: "Set up a workspace",
 				confidence: "medium",
+			},
+			readout: {
+				strengths: [
+					{
+						title: "A recognizable workspace",
+						reason: "The name field may help teammates identify shared work when returning to it.",
+						basis: "inferred",
+						confidence: "medium",
+						evidenceImageIds: ids,
+					},
+				],
+				frictions: [],
 			},
 			decisions: [
 				{
@@ -250,7 +264,14 @@ describe("ScreenshotIntelService", () => {
 		expect(body.systemInstruction.parts[0].text).toContain("Never infer chronology");
 		expect(body.systemInstruction.parts[0].text).toContain(PRODUCT_REASONING_RULES);
 		expect(body.generationConfig.responseJsonSchema).toEqual(
-			expect.objectContaining({ required: expect.arrayContaining(["decisions", "understanding"]) }),
+			expect.objectContaining({
+				required: expect.arrayContaining(["decisions", "understanding", "readout"]),
+				properties: expect.objectContaining({
+					screens: expect.objectContaining({
+						items: expect.objectContaining({ required: expect.arrayContaining(["purpose"]) }),
+					}),
+				}),
+			}),
 		);
 		expect(JSON.stringify(body.generationConfig.responseJsonSchema)).not.toMatch(
 			/minItems|maxItems/,
@@ -272,6 +293,10 @@ describe("ScreenshotIntelService", () => {
 			batch.images.map((image) => image.id),
 		);
 		expect(result.analysis?.understanding?.job).toBe("Set up a workspace");
+		expect(result.analysis?.screens[0].purpose).toContain("recognizable home");
+		expect(result.analysis?.readout?.strengths[0].evidenceImageIds).toEqual(
+			batch.images.map((image) => image.id),
+		);
 		expect(result.settings?.productBrief).toBe("A tool for solo architects");
 		expect(result.analyzedAt).toBeTruthy();
 		expect(result.organizedPath).toBe(path.join(root, "screenshot-intel", batch.id, "organized"));
@@ -322,11 +347,63 @@ describe("ScreenshotIntelService", () => {
 	it.each([
 		"decisions",
 		"understanding",
+		"readout",
 	] as const)("requires %s on new replies while allowing old stored reports", async (field) => {
 		const { fetcher } = google((analysis) => {
 			const legacy = { ...analysis };
 			delete legacy[field];
 			return legacy;
+		});
+		const intel = service("test-key", fetcher);
+		const batch = await intel.import([await image()]);
+		await expect(intel.analyze(batch.id)).rejects.toThrow();
+		expect((await intel.get(batch.id)).analysis).toBeNull();
+	});
+	it.each([
+		"missing",
+		"too long",
+	])("requires a bounded purpose on each new screen (%s)", async (kind) => {
+		const { fetcher } = google((analysis) => ({
+			...analysis,
+			screens: analysis.screens.map((screen) => ({
+				...screen,
+				purpose: kind === "missing" ? undefined : "x".repeat(601),
+			})),
+		}));
+		const intel = service("test-key", fetcher);
+		const batch = await intel.import([await image()]);
+		await expect(intel.analyze(batch.id)).rejects.toThrow();
+		expect((await intel.get(batch.id)).analysis).toBeNull();
+	});
+	it.each([
+		"too many",
+		"duplicate refs",
+		"unknown refs",
+		"empty refs",
+	])("rejects invalid product readout: %s", async (kind) => {
+		const { fetcher } = google((analysis) => {
+			const insight = analysis.readout?.strengths[0];
+			if (!insight) throw new Error("Missing fixture readout insight");
+			return {
+				...analysis,
+				readout: {
+					strengths:
+						kind === "too many"
+							? Array.from({ length: 4 }, () => insight)
+							: [
+									{
+										...insight,
+										evidenceImageIds:
+											kind === "duplicate refs"
+												? [insight.evidenceImageIds[0], insight.evidenceImageIds[0]]
+												: kind === "empty refs"
+													? []
+													: ["image_00000000-0000-0000-0000-000000000099"],
+									},
+								],
+					frictions: [],
+				},
+			};
 		});
 		const intel = service("test-key", fetcher);
 		const batch = await intel.import([await image()]);
@@ -366,10 +443,16 @@ describe("ScreenshotIntelService", () => {
 		expect((await intel.get(batch.id)).analysis).toBeNull();
 	});
 	it("accepts no decisions for thin evidence and enforces local unknown bounds", async () => {
-		const thin = google((analysis) => ({ ...analysis, decisions: [] }));
+		const thin = google((analysis) => ({
+			...analysis,
+			decisions: [],
+			readout: { strengths: [], frictions: [] },
+		}));
 		const intel = service("test-key", thin.fetcher);
 		const batch = await intel.import([await image()]);
-		expect((await intel.analyze(batch.id)).analysis?.decisions).toEqual([]);
+		const result = await intel.analyze(batch.id);
+		expect(result.analysis?.decisions).toEqual([]);
+		expect(result.analysis?.readout).toEqual({ strengths: [], frictions: [] });
 		const excessive = google((analysis) => ({
 			...analysis,
 			unknowns: Array.from({ length: 31 }, () => "Unestablished"),
