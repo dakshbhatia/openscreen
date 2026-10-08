@@ -2537,7 +2537,9 @@ describe("zoom transitions are reported, not hidden (#1028)", () => {
 	it("warns when a trim at the zoom's end cuts its whole zoom-out (the issue's repro)", () => {
 		const trimmed = run(zoomedAt10to12().document, "addTrim", { startSec: 12, endSec: 14 });
 		const zoomId = snapshotZoom(trimmed.document).id;
-		expect(trimmed.payload.cutTransitions).toEqual([{ zoomId, side: "out", cutSec: MOVE_SEC }]);
+		expect(trimmed.payload.cutTransitions).toEqual([
+			{ zoomId, side: "out", cutSec: MOVE_SEC, by: "trim" },
+		]);
 		expect(snapshotZoom(trimmed.document).cutByTrim).toBe("out");
 	});
 
@@ -2578,7 +2580,7 @@ describe("zoom transitions are reported, not hidden (#1028)", () => {
 			depth: 3,
 		});
 		expect(added.payload.cutTransitions).toEqual([
-			{ zoomId: added.payload.zoomId, side: "out", cutSec: MOVE_SEC },
+			{ zoomId: added.payload.zoomId, side: "out", cutSec: MOVE_SEC, by: "trim" },
 		]);
 	});
 
@@ -2591,7 +2593,7 @@ describe("zoom transitions are reported, not hidden (#1028)", () => {
 		const trimmed = run(shortSingleClip(), "addTrim", { startSec: 8, endSec: 9.5 });
 		const added = run(trimmed.document, "addZoom", { startSec: 10, endSec: 12, depth: 3 });
 		expect(added.payload.cutTransitions).toEqual([
-			{ zoomId: added.payload.zoomId, side: "in", cutSec: 0.423 },
+			{ zoomId: added.payload.zoomId, side: "in", cutSec: 0.423, by: "trim" },
 		]);
 		expect(snapshotZoom(added.document).cutByTrim).toBe("in");
 	});
@@ -2601,7 +2603,7 @@ describe("zoom transitions are reported, not hidden (#1028)", () => {
 		const zoomId = snapshotZoom(trimmed.document).id;
 		const moved = run(trimmed.document, "setZoom", { zoomId, startSec: 9 });
 		expect(moved.payload.cutTransitions).toEqual([
-			{ zoomId: moved.payload.zoomId, side: "out", cutSec: MOVE_SEC },
+			{ zoomId: moved.payload.zoomId, side: "out", cutSec: MOVE_SEC, by: "trim" },
 		]);
 	});
 
@@ -2630,8 +2632,8 @@ describe("zoom transitions are reported, not hidden (#1028)", () => {
 		const [first, second] = run(trimmed.document, "getCurrentDocument", {}).payload.zoomRanges;
 		expect(first.panToZoomId).toBeUndefined();
 		expect(trimmed.payload.cutTransitions).toEqual([
-			{ zoomId: first.id, side: "out", cutSec: MOVE_SEC },
-			{ zoomId: second.id, side: "in", cutSec: MOVE_SEC },
+			{ zoomId: first.id, side: "out", cutSec: MOVE_SEC, by: "trim" },
+			{ zoomId: second.id, side: "in", cutSec: MOVE_SEC, by: "trim" },
 		]);
 	});
 
@@ -2653,6 +2655,45 @@ describe("zoom transitions are reported, not hidden (#1028)", () => {
 		const zooms = run(both.document, "getCurrentDocument", {}).payload.zoomRanges;
 		expect(zooms[0].panToZoomId).toBeUndefined();
 		expect(zooms[0].zoomOutUntilSec).toBe(12 + MOVE_SEC);
+
+		// Each clip renders on its own: the junction cuts the first zoom's whole zoom-out and
+		// the start of the second one's zoom-in, and says it is a junction, not a trim.
+		expect(first.payload.cutTransitions).toEqual([
+			{ zoomId: first.payload.zoomId, side: "out", cutSec: MOVE_SEC, by: "junction" },
+		]);
+		expect(both.payload.cutTransitions).toEqual([
+			{ zoomId: both.payload.zoomId, side: "in", cutSec: 0.423, by: "junction" },
+		]);
+		expect(zooms[0]).toMatchObject({ cutByJunction: "out" });
+		expect(zooms[1]).toMatchObject({ cutByJunction: "in" });
+		expect(zooms[0].cutByTrim).toBeUndefined();
+		expect(zooms[1].cutByTrim).toBeUndefined();
+	});
+
+	it("names a trim and a junction apart on the same zoom", () => {
+		const base = shortSingleClip();
+		const clip = base.timeline.clips[0];
+		const twoClips: AxcutDocument = {
+			...base,
+			timeline: {
+				...base.timeline,
+				clips: [
+					{ ...clip, sourceEndSec: 12.5, timelineEndSec: 12.5 },
+					{ ...clip, id: "clip_2", sourceStartSec: 12.5, timelineStartSec: 12.5 },
+				],
+			},
+		};
+		const zoomed = run(twoClips, "addZoom", { startSec: 10, endSec: 12, depth: 3 });
+		const trimmed = run(zoomed.document, "addTrim", { startSec: 9, endSec: 9.5 });
+		expect(snapshotZoom(trimmed.document)).toMatchObject({ cutByTrim: "in", cutByJunction: "out" });
+	});
+
+	it("does not call the end of the timeline a junction", () => {
+		const base = shortSingleClip();
+		const end = base.timeline.clips[0].timelineEndSec;
+		const added = run(base, "addZoom", { startSec: end - 2, endSec: end - 0.5, depth: 3 });
+		expect(added.payload.cutTransitions).toBeUndefined();
+		expect(snapshotZoom(added.document).cutByJunction).toBeUndefined();
 	});
 
 	it("stretches the zoom-out across a speed region, and catches a trim placed there", () => {
@@ -2660,7 +2701,7 @@ describe("zoom transitions are reported, not hidden (#1028)", () => {
 		expect(snapshotZoom(sped.document).zoomOutUntilSec).toBe(14.77);
 		const trimmed = run(sped.document, "addTrims", { ranges: [{ startSec: 14, endSec: 15 }] });
 		expect(trimmed.payload.applied[0].cutTransitions).toEqual([
-			{ zoomId: snapshotZoom(trimmed.document).id, side: "out", cutSec: 0.77 },
+			{ zoomId: snapshotZoom(trimmed.document).id, side: "out", cutSec: 0.77, by: "trim" },
 		]);
 	});
 });

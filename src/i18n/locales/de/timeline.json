@@ -38,6 +38,8 @@
 		"zoomOut": "Herauszoomen: Die Ansicht zoomt nach dem Ende des Zooms wieder heraus",
 		"zoomInCut": "Ein Trim entfernt {{seconds}} s des Hineinzoomens. Der Export springt am Schnitt.",
 		"zoomOutCut": "Ein Trim entfernt {{seconds}} s des Herauszoomens. Der Export springt am Schnitt.",
+		"zoomInJunction": "Ein Clip-Übergang entfernt {{seconds}} s des Hineinzoomens. Der Export springt am Übergang.",
+		"zoomOutJunction": "Ein Clip-Übergang entfernt {{seconds}} s des Herauszoomens. Der Export springt am Übergang.",
 		"pan": "Schwenk: Die Ansicht fährt direkt zum nächsten Zoom"
 	},
 	"emptyState": {

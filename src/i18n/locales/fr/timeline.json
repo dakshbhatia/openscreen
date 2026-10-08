@@ -38,6 +38,8 @@
 		"zoomOut": "Zoom arrière : l'image s'élargit à nouveau après la fin du zoom",
 		"zoomInCut": "Une coupe retire {{seconds}} s du zoom avant. L'export saute à la coupe.",
 		"zoomOutCut": "Une coupe retire {{seconds}} s du zoom arrière. L'export saute à la coupe.",
+		"zoomInJunction": "Une jonction entre clips retire {{seconds}} s du zoom avant. L'export saute à la jonction.",
+		"zoomOutJunction": "Une jonction entre clips retire {{seconds}} s du zoom arrière. L'export saute à la jonction.",
 		"pan": "Panoramique : l'image glisse directement vers le zoom suivant"
 	},
 	"emptyState": {

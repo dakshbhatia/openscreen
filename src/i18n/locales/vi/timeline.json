@@ -38,6 +38,8 @@
 		"zoomOut": "Thu nhỏ: khung hình thu nhỏ lại sau khi kết thúc thu phóng",
 		"zoomInCut": "Một đoạn cắt xóa {{seconds}} giây của phần phóng to. Bản xuất sẽ nhảy tại điểm cắt.",
 		"zoomOutCut": "Một đoạn cắt xóa {{seconds}} giây của phần thu nhỏ. Bản xuất sẽ nhảy tại điểm cắt.",
+		"zoomInJunction": "Một điểm nối giữa các clip xóa {{seconds}} giây của phần phóng to. Bản xuất sẽ nhảy tại điểm nối.",
+		"zoomOutJunction": "Một điểm nối giữa các clip xóa {{seconds}} giây của phần thu nhỏ. Bản xuất sẽ nhảy tại điểm nối.",
 		"pan": "Lia máy: khung hình chuyển thẳng sang lần thu phóng tiếp theo"
 	},
 	"emptyState": {

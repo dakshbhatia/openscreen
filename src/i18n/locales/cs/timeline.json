@@ -38,6 +38,8 @@
 		"zoomOut": "Oddálení: pohled se po konci přiblížení znovu oddaluje",
 		"zoomInCut": "Oříznutí odstraní {{seconds}} s najetí. Export v místě střihu skočí.",
 		"zoomOutCut": "Oříznutí odstraní {{seconds}} s oddálení. Export v místě střihu skočí.",
+		"zoomInJunction": "Spoj klipů odstraní {{seconds}} s najetí. Export v místě spoje skočí.",
+		"zoomOutJunction": "Spoj klipů odstraní {{seconds}} s oddálení. Export v místě spoje skočí.",
 		"pan": "Posun: pohled přejede rovnou na další přiblížení"
 	},
 	"emptyState": {

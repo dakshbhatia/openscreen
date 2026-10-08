@@ -38,6 +38,8 @@
 		"zoomOut": "Zoom out: la vista si allontana di nuovo dopo la fine dello zoom",
 		"zoomInCut": "Un taglio rimuove {{seconds}} s dello zoom in. L'esportazione salta al taglio.",
 		"zoomOutCut": "Un taglio rimuove {{seconds}} s dello zoom out. L'esportazione salta al taglio.",
+		"zoomInJunction": "Una giunzione tra clip rimuove {{seconds}} s dello zoom in. L'esportazione salta alla giunzione.",
+		"zoomOutJunction": "Una giunzione tra clip rimuove {{seconds}} s dello zoom out. L'esportazione salta alla giunzione.",
 		"pan": "Panoramica: la vista si sposta direttamente allo zoom successivo"
 	},
 	"emptyState": {

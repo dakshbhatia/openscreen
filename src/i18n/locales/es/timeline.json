@@ -38,6 +38,8 @@
 		"zoomOut": "Alejamiento: la vista se aleja de nuevo cuando termina el zoom",
 		"zoomInCut": "Un recorte quita {{seconds}} s del acercamiento. La exportación salta en el corte.",
 		"zoomOutCut": "Un recorte quita {{seconds}} s del alejamiento. La exportación salta en el corte.",
+		"zoomInJunction": "Una unión entre clips quita {{seconds}} s del acercamiento. La exportación salta en la unión.",
+		"zoomOutJunction": "Una unión entre clips quita {{seconds}} s del alejamiento. La exportación salta en la unión.",
 		"pan": "Paneo: la vista pasa directamente al siguiente zoom"
 	},
 	"emptyState": {

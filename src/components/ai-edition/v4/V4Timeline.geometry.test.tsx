@@ -1097,10 +1097,10 @@ describe("V4Timeline zoom trails", () => {
 	const trail = (side: "in" | "out" | "pan") =>
 		document.querySelector<HTMLElement>(`[data-zoom-trail="${side}"]`) as HTMLElement;
 
-	function renderZoom(overrides: Record<string, unknown>) {
+	function renderZoom(overrides: Record<string, unknown>, clips?: ReturnType<typeof clip>[]) {
 		i18n.translate = (namespace, key, vars) =>
 			translate("en", namespace as I18nNamespace, key, vars);
-		renderTimeline(undefined, undefined, [NO_CAMERA_ASSET], undefined, {
+		renderTimeline(clips, undefined, [NO_CAMERA_ASSET], undefined, {
 			zoomRegions: [ZOOM],
 			...overrides,
 		});
@@ -1123,6 +1123,26 @@ describe("V4Timeline zoom trails", () => {
 		const cut = trail("out").querySelector<HTMLElement>("[data-zoom-trail-cut]");
 		expect(Number.parseFloat(cut?.style.left ?? "")).toBeCloseTo(0, 6);
 		expect(Number.parseFloat(cut?.style.width ?? "")).toBeCloseTo(100, 6);
+	});
+
+	it("hatches the part of a zoom-out past a clip junction, naming the junction", () => {
+		renderZoom({}, [clip(0, 12.5), clip(12.5, TOTAL_SEC)]);
+		const lost = 12 + W_SEC - 12.5;
+		expect(trail("out")).toHaveAccessibleName(
+			`A clip junction removes ${lost.toFixed(2)} s of the zoom-out. The export jumps at the junction.`,
+		);
+		const cut = trail("out").querySelector<HTMLElement>("[data-zoom-trail-cut]");
+		expect(Number.parseFloat(cut?.style.left ?? "")).toBeCloseTo((0.5 / W_SEC) * 100, 6);
+		expect(Number.parseFloat(cut?.style.width ?? "")).toBeCloseTo((lost / W_SEC) * 100, 6);
+		expect(trail("in").querySelector("[data-zoom-trail-cut]")).toBeNull();
+	});
+
+	it("does not call the end of the timeline a junction", () => {
+		const end = TOTAL_SEC * 1000;
+		renderZoom({ zoomRegions: [{ ...ZOOM, startMs: end - 2000, endMs: end - 500 }] });
+		expect(trail("out")).toHaveAccessibleName(
+			"Zoom-out: the view moves back out after the zoom ends",
+		);
 	});
 
 	it("draws one pan between chained zooms instead of a zoom-out and a zoom-in", () => {

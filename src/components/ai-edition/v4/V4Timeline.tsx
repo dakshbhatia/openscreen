@@ -1842,7 +1842,8 @@ export function V4Timeline({
 
 	// Each zoom's camera moves (#1028): the pill shows the hold, the zoom-in runs in the trail
 	// before it and the zoom-out in the trail after it, on the speed-aware clock the compositor
-	// uses. The part a trim cuts is hatched: the export jumps there instead of easing. Chained
+	// uses. The part a trim or a clip junction cuts is hatched: the export jumps there instead of
+	// easing. The timeline's own end is no junction: nothing plays after it to jump to. Chained
 	// zooms get one pan trail between them instead of a zoom-out and a zoom-in. Display only,
 	// not a control. Hidden while a clip is dragged, when the pills split and slide.
 	const renderZoomTrails = () => {
@@ -1860,14 +1861,16 @@ export function V4Timeline({
 		const totalMs = total * 1000;
 		const sec = (cutMs: number) => (cutMs / 1000).toFixed(2);
 		const zooms = zoomRuns.map((r) => ms(liveSpan(r.ids[0], r)));
-		const junctions = clips.map((c) => ms({ start: c.timelineEndSec, end: c.timelineEndSec }));
+		const junctions = clips
+			.filter((c) => c.timelineStartSec > 0)
+			.map((c) => ms({ start: c.timelineStartSec, end: c.timelineStartSec }));
 		const pans = chainedPans(zooms, speeds, [...trims, ...junctions]);
 		return zoomRuns.flatMap((r, i) => {
 			const zoom = zooms[i];
 			const pan = pans.find((p) => p.from === i);
 			const panned = pans.some((p) => p.to === i);
 			const moves = zoomTransitions({ ...zoom, scale: effectiveZoomScale(r.member) }, speeds);
-			const cut = transitionCutsMs(zoom, moves, trims);
+			const cut = transitionCutsMs(zoom, moves, trims, junctions);
 			const outUntilMs = Math.min(moves.outUntilMs, totalMs);
 			const zoomIn = {
 				side: "in",
@@ -1875,7 +1878,12 @@ export function V4Timeline({
 				toMs: zoom.startMs,
 				cutFromMs: moves.inFromMs,
 				cutToMs: moves.inFromMs + cut.inMs,
-				text: cut.inMs > 0 ? t("trails.zoomInCut", { seconds: sec(cut.inMs) }) : t("trails.zoomIn"),
+				text:
+					cut.inMs > 0
+						? t(cut.inByJunction ? "trails.zoomInJunction" : "trails.zoomInCut", {
+								seconds: sec(cut.inMs),
+							})
+						: t("trails.zoomIn"),
 			};
 			const trails = [
 				...(panned ? [] : [zoomIn]),
@@ -1896,7 +1904,9 @@ export function V4Timeline({
 							cutToMs: outUntilMs,
 							text:
 								cut.outMs > 0
-									? t("trails.zoomOutCut", { seconds: sec(cut.outMs) })
+									? t(cut.outByJunction ? "trails.zoomOutJunction" : "trails.zoomOutCut", {
+											seconds: sec(cut.outMs),
+										})
 									: t("trails.zoomOut"),
 						},
 			];

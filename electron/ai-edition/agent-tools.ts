@@ -721,9 +721,9 @@ function roundSec(ms: number): number {
 	return Math.round(ms) / 1000;
 }
 
-// Each zoom pill's camera moves in virtual ms, and how much of each a trim cuts off (#1028).
+// Each zoom pill's camera moves in virtual ms, and how much of each a cut takes off (#1028).
 // The pill shows the hold only: the move in runs before it, the move out after it, and a
-// trim over either makes the export jump at the cut.
+// trim or a clip junction over either makes the export jump at the cut.
 function zoomTransitionsForAgent(document: AxcutDocument) {
 	const legacy = document.legacyEditor as Record<string, unknown> | null;
 	const speedRegions =
@@ -745,22 +745,25 @@ function zoomTransitionsForAgent(document: AxcutDocument) {
 		});
 	});
 	// Chained zooms pan from one to the next instead: no zoom-out, no zoom-in, nothing to cut
-	// (a trim between them would have broken the chain).
+	// (a trim or a junction between them would have broken the chain). A junction is where a
+	// clip starts after another: the timeline's own end has nothing after it to jump to.
 	const zooms = coalesceForAgent(document.zoomRanges);
-	const junctions = document.timeline.clips.map((clip) => ({
-		startMs: clip.timelineEndSec * 1000,
-		endMs: clip.timelineEndSec * 1000,
-	}));
+	const junctions = document.timeline.clips
+		.filter((clip) => clip.timelineStartSec > 0)
+		.map((clip) => ({
+			startMs: clip.timelineStartSec * 1000,
+			endMs: clip.timelineStartSec * 1000,
+		}));
 	const pans = chainedPans(zooms, speedRegions, [...trims, ...junctions]);
 	return zooms.map((zoom, i) => {
 		const transitions = zoomTransitions({ ...zoom, scale: effectiveZoomScale(zoom) }, speedRegions);
 		const panOut = pans.find((p) => p.from === i);
 		const panIn = pans.find((p) => p.to === i);
-		const cut = transitionCutsMs(zoom, transitions, trims);
+		const cut = transitionCutsMs(zoom, transitions, trims, junctions);
 		return {
 			zoom,
 			transitions,
-			cut: { inMs: panIn ? 0 : cut.inMs, outMs: panOut ? 0 : cut.outMs },
+			cut: { ...cut, inMs: panIn ? 0 : cut.inMs, outMs: panOut ? 0 : cut.outMs },
 			panTo: panOut && { zoomId: zooms[panOut.to].id, untilMs: panOut.untilMs },
 			panFromZoomId: panIn && zooms[panIn.from].id,
 		};
@@ -777,6 +780,7 @@ function cutTransitionsReport(before: AxcutDocument, after: AxcutDocument) {
 					zoomId: zoom.id,
 					side,
 					cutSec: roundSec(side === "in" ? cut.inMs : cut.outMs),
+					by: (side === "in" ? cut.inByJunction : cut.outByJunction) ? "junction" : "trim",
 					key: `${zoom.id}:${side}:${zoom.startMs}:${zoom.endMs}`,
 				}))
 				.filter((c) => c.cutSec > 0),
@@ -786,6 +790,13 @@ function cutTransitionsReport(before: AxcutDocument, after: AxcutDocument) {
 		.filter((c) => !known.has(`${c.key}:${c.cutSec}`))
 		.map(({ key: _key, ...c }) => c);
 	return cuts.length ? { cutTransitions: cuts } : {};
+}
+
+/** The moves a trim (or, with `byJunction`, a clip junction) cuts: in, out, both or none. */
+function cutSides(cut: ReturnType<typeof transitionCutsMs>, byJunction: boolean) {
+	const cutIn = cut.inMs > 0 && cut.inByJunction === byJunction;
+	const cutOut = cut.outMs > 0 && cut.outByJunction === byJunction;
+	return cutIn ? (cutOut ? "both" : "in") : cutOut ? "out" : undefined;
 }
 
 // Compact projection of the document for the model: everything it needs to
@@ -842,7 +853,7 @@ export function documentSnapshotForModel(
 			"a setZoom that only changes depth on such a zoom clears customScale so the depth takes effect. " +
 			"startSec–endSec is where the zoom HOLDS: it animates in over zoomInFromSec–startSec and out over " +
 			"endSec–zoomOutUntilSec (transitionSec of screen time each; a speed region scales that on the " +
-			"timeline, longer above 1x and shorter below, so read the bounds rather than adding transitionSec). cutByTrim names the move a trim cuts into (in, out or both): the export jumps at that cut. " +
+			"timeline, longer above 1x and shorter below, so read the bounds rather than adding transitionSec). cutByTrim names the move a trim cuts into (in, out or both), cutByJunction the move a clip junction cuts (the clip ends before the move does): the export jumps at that cut. " +
 			"Two zooms at most 1.5 s apart on screen, with no trim or clip junction between them, are CHAINED: " +
 			"no zoom-out and back in, the camera pans from the first (panToZoomId, panUntilSec: 1 s of screen " +
 			"time from its endSec, which can run into the next span) to the second (panFromZoomId).",
@@ -912,9 +923,8 @@ export function documentSnapshotForModel(
 					? { panToZoomId: panTo.zoomId, panUntilSec: roundSec(panTo.untilMs) }
 					: { zoomOutUntilSec: roundSec(transitions.outUntilMs) }),
 				transitionSec: roundSec(transitions.durationMs),
-				...(cut.inMs > 0 || cut.outMs > 0
-					? { cutByTrim: cut.inMs > 0 ? (cut.outMs > 0 ? "both" : "in") : "out" }
-					: {}),
+				...(cutSides(cut, false) ? { cutByTrim: cutSides(cut, false) } : {}),
+				...(cutSides(cut, true) ? { cutByJunction: cutSides(cut, true) } : {}),
 				depth: z.depth,
 				renderedScale: effectiveZoomScale(z),
 				// Emitted only when set: an unconditional `customScale: null` on every

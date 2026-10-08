@@ -2,13 +2,14 @@
 // zoom-in runs entirely before its start and the zoom-out entirely after its end, each
 // lasting `zoomTransitionMs(scale)` of SCREEN time (`computeRegionStrength`, mirror of
 // `zoom_region_strength` in crates/compositor/src/regions.rs). These helpers turn those
-// windows into timeline ms, through the same speed-aware clock, and measure what a trim cuts
-// off them: the render drops the trimmed frames, so the camera jumps at the cut instead of
-// easing.
+// windows into timeline ms, through the same speed-aware clock, and measure what a trim or a
+// clip junction cuts off them: the render drops the trimmed frames and renders each clip on
+// its own, so the camera jumps at the cut instead of easing.
 //
 // Chained zooms (closer than 1.5 s on screen) have no zoom-out and zoom-in between them: the
-// camera pans from one to the other instead (`chainedPans`). A trim between two zooms splits
-// them into separate segments, which breaks the chain, so each then has its own windows.
+// camera pans from one to the other instead (`chainedPans`). A trim or a junction between two
+// zooms splits them into separate segments, which breaks the chain, so each then has its own
+// windows.
 
 import {
 	CHAINED_ZOOM_PAN_GAP_MS,
@@ -54,30 +55,49 @@ export function zoomTransitions(
 }
 
 /**
- * Timeline ms of each move the trims cut off (0 when untouched). The zoom-in only plays after
- * the last trimmed instant before the zoom, the zoom-out only until the first one after it.
- * A zoom entirely under a trim never plays and the compositor renders it without envelopes
- * (`under_trim`), so it has nothing to cut.
+ * Timeline ms of each move the cuts take off (0 when untouched), and whether a clip junction
+ * rather than a trim is the cut that does it. The compositor renders each clip segment on its
+ * own and gives a zoom only to the segments it overlaps, so the zoom-in only plays after the
+ * last cut before the zoom and the zoom-out only until the first one after it, a cut touching
+ * the pill's edge included. A junction is a zero-length cut. A zoom entirely under a trim
+ * never plays and the compositor renders it without envelopes (`under_trim`), so it has
+ * nothing to cut.
  */
 export function transitionCutsMs(
 	zoom: Span,
 	transitions: ZoomTransitions,
 	trims: readonly Span[],
-): { inMs: number; outMs: number } {
-	if (trims.some((t) => t.startMs <= zoom.startMs && t.endMs >= zoom.endMs)) {
-		return { inMs: 0, outMs: 0 };
-	}
+	junctions: readonly Span[] = [],
+): { inMs: number; outMs: number; inByJunction: boolean; outByJunction: boolean } {
 	let resumesAt = transitions.inFromMs;
 	let jumpsAt = transitions.outUntilMs;
-	for (const t of trims) {
-		if (t.startMs < zoom.startMs && t.endMs > transitions.inFromMs) {
-			resumesAt = Math.max(resumesAt, Math.min(t.endMs, zoom.startMs));
-		}
-		if (t.endMs > zoom.endMs && t.startMs < transitions.outUntilMs) {
-			jumpsAt = Math.min(jumpsAt, Math.max(t.startMs, zoom.endMs));
+	let inByJunction = false;
+	let outByJunction = false;
+	if (!trims.some((t) => t.startMs <= zoom.startMs && t.endMs >= zoom.endMs)) {
+		for (const [cuts, junction] of [
+			[trims, false],
+			[junctions, true],
+		] as const) {
+			for (const c of cuts) {
+				const resumes = Math.min(c.endMs, zoom.startMs);
+				if (c.startMs <= zoom.startMs && resumes > resumesAt) {
+					resumesAt = resumes;
+					inByJunction = junction;
+				}
+				const jumps = Math.max(c.startMs, zoom.endMs);
+				if (c.endMs >= zoom.endMs && jumps < jumpsAt) {
+					jumpsAt = jumps;
+					outByJunction = junction;
+				}
+			}
 		}
 	}
-	return { inMs: resumesAt - transitions.inFromMs, outMs: transitions.outUntilMs - jumpsAt };
+	return {
+		inMs: resumesAt - transitions.inFromMs,
+		outMs: transitions.outUntilMs - jumpsAt,
+		inByJunction,
+		outByJunction,
+	};
 }
 
 export interface ChainedPan {

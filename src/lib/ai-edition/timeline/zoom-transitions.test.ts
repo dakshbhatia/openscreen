@@ -59,10 +59,47 @@ describe("transitionCutsMs", () => {
 	});
 
 	it("ignores trims clear of the windows, inside the pill, or swallowing the whole zoom", () => {
-		const none = { inMs: 0, outMs: 0 };
+		const none = { inMs: 0, outMs: 0, inByJunction: false, outByJunction: false };
 		expect(transitionCutsMs(zoom, t, [{ startMs: 13_000, endMs: 14_000 }])).toEqual(none);
 		expect(transitionCutsMs(zoom, t, [{ startMs: 10_500, endMs: 11_000 }])).toEqual(none);
 		expect(transitionCutsMs(zoom, t, [{ startMs: 9000, endMs: 14_000 }])).toEqual(none);
+	});
+
+	it("loses the whole move to a cut touching the pill's edge, the segment it ends", () => {
+		expect(transitionCutsMs(zoom, t, [{ startMs: 11_000, endMs: 12_000 }]).outMs).toBeCloseTo(W, 6);
+		expect(transitionCutsMs(zoom, t, [{ startMs: 10_000, endMs: 11_000 }]).inMs).toBeCloseTo(W, 6);
+	});
+
+	it("counts a clip junction as a zero-length cut, and says so (issue #1028)", () => {
+		const at = (ms: number) => [{ startMs: ms, endMs: ms }];
+		expect(transitionCutsMs(zoom, t, [], at(12_500))).toEqual({
+			inMs: 0,
+			outMs: expect.closeTo(12_000 + W - 12_500, 6),
+			inByJunction: false,
+			outByJunction: true,
+		});
+		expect(transitionCutsMs(zoom, t, [], at(9500))).toMatchObject({
+			inMs: expect.closeTo(9500 - (10_000 - W), 6),
+			inByJunction: true,
+		});
+		expect(transitionCutsMs(zoom, t, [], at(12_000)).outMs).toBeCloseTo(W, 6);
+		expect(transitionCutsMs(zoom, t, [], at(10_000)).inMs).toBeCloseTo(W, 6);
+		const none = { inMs: 0, outMs: 0, inByJunction: false, outByJunction: false };
+		expect(transitionCutsMs(zoom, t, [], at(12_000 + W))).toEqual(none);
+		expect(transitionCutsMs(zoom, t, [], at(10_000 - W))).toEqual(none);
+	});
+
+	it("blames the cut nearest the pill, where the export jumps", () => {
+		const trim = [{ startMs: 12_600, endMs: 13_500 }];
+		const junction = (ms: number) => [{ startMs: ms, endMs: ms }];
+		expect(transitionCutsMs(zoom, t, trim, junction(12_300))).toMatchObject({
+			outMs: expect.closeTo(12_000 + W - 12_300, 6),
+			outByJunction: true,
+		});
+		expect(transitionCutsMs(zoom, t, trim, junction(12_800))).toMatchObject({
+			outMs: expect.closeTo(12_000 + W - 12_600, 6),
+			outByJunction: false,
+		});
 	});
 });
 
