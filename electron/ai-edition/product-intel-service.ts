@@ -17,6 +17,13 @@ import {
 } from "../../src/lib/product-intel";
 
 const API = "https://generativelanguage.googleapis.com";
+// Large bounded arrays make Google's response grammar reject otherwise valid
+// requests. Keep those limits in local validation, outside the wire schema.
+const geminiAnalysisSchema = productAnalysisSchema.extend({
+	steps: z.array(productAnalysisSchema.shape.steps.element),
+	findings: z.array(productAnalysisSchema.shape.findings.element),
+	unknowns: z.array(productAnalysisSchema.shape.unknowns.element),
+});
 const sourceMime: Record<string, string> = {
 	".mp4": "video/mp4",
 	".mov": "video/quicktime",
@@ -57,6 +64,7 @@ export interface IntelSource {
 
 export class ProductIntelService {
 	private readonly root: string;
+	private settingsWrites: Promise<void> = Promise.resolve();
 	private jobs = new Map<string, { controller: AbortController; status: string }>();
 	constructor(
 		userData: string,
@@ -92,7 +100,14 @@ export class ProductIntelService {
 	}
 	async saveSettings(settings: IntelSettings): Promise<IntelSettings> {
 		const parsed = intelSettingsSchema.parse(settings);
-		await this.write(path.join(this.root, "settings.json"), parsed);
+		const write = this.settingsWrites.then(() =>
+			this.write(path.join(this.root, "settings.json"), parsed),
+		);
+		// Keep later context saves ordered even if an earlier disk write fails.
+		this.settingsWrites = write.catch(() => {
+			/* The initiating caller receives the error below. */
+		});
+		await write;
 		return parsed;
 	}
 	async getReport(projectId: string): Promise<IntelReport | null> {
@@ -218,7 +233,7 @@ export class ProductIntelService {
 				if (uploaded.state !== "ACTIVE")
 					throw new Error("Gemini could not process this recording. Try exporting it as MP4.");
 				job.status = "Analyzing through your product lens";
-				const { $schema: _schema, ...responseJsonSchema } = z.toJSONSchema(productAnalysisSchema);
+				const { $schema: _schema, ...responseJsonSchema } = z.toJSONSchema(geminiAnalysisSchema);
 				const response = replySchema.parse(
 					await (
 						await request(`${API}/v1beta/models/${settings.model}:generateContent`, {

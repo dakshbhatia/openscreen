@@ -132,6 +132,7 @@ export function ScreenshotBoard({ active }: Props) {
 	async function run(
 		kind: "import" | "analyze" | "organize",
 		action: () => Promise<ScreenshotBatch | null>,
+		analyzeImported = false,
 	) {
 		if (working.current) return;
 		working.current = true;
@@ -139,7 +140,15 @@ export function ScreenshotBoard({ active }: Props) {
 		setError("");
 		try {
 			const result = await action();
-			if (result) remember(result);
+			if (result) {
+				remember(result);
+				if (analyzeImported && connected) {
+					setBusy("analyze");
+					await nativeBridgeClient.productIntel.saveSettings(settings);
+					settingsDirty.current = false;
+					remember(await nativeBridgeClient.screenshotIntel.analyze(result.id));
+				}
+			}
 		} catch (err) {
 			setError(message(err));
 		} finally {
@@ -272,7 +281,7 @@ export function ScreenshotBoard({ active }: Props) {
 					setError("Could not read these files. Use Add screenshots to choose them.");
 					return;
 				}
-				void run("import", () => nativeBridgeClient.screenshotIntel.import(paths));
+				void run("import", () => nativeBridgeClient.screenshotIntel.import(paths), true);
 			}}
 		>
 			<div className={`${styles.import} ${dragging ? styles.dragging : ""}`}>
@@ -282,7 +291,7 @@ export function ScreenshotBoard({ active }: Props) {
 					type="button"
 					className={styles.secondary}
 					disabled={!loaded || !!busy}
-					onClick={() => void run("import", () => nativeBridgeClient.screenshotIntel.pick())}
+					onClick={() => void run("import", () => nativeBridgeClient.screenshotIntel.pick(), true)}
 				>
 					<Upload size={14} /> Add screenshots
 				</button>

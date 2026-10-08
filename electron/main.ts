@@ -21,6 +21,8 @@ import {
 	PRODUCT_NAME,
 	usesNativeAboutPanel,
 } from "./about";
+import { LlmConfigStore } from "./ai-edition/llm-config-store";
+import { PROVIDER_DEFINITIONS } from "./ai-edition/provider-registry";
 import { AppSettingsStore } from "./app-settings";
 import {
 	blockedFromInstalling,
@@ -1154,6 +1156,20 @@ app.on("will-quit", () => {
 const appReady = !cliCommand && hasSingleInstanceLock ? app.whenReady() : null;
 
 appReady?.then(async () => {
+	// One-time, explicitly requested local setup. Secrets never enter argv or logs.
+	if (process.env.PRODUCT_INTEL_SAVE_GEMINI_KEY === "1") {
+		const google = PROVIDER_DEFINITIONS.find((provider) => provider.id === "google");
+		try {
+			await new LlmConfigStore(app.getPath("userData")).importEnvironmentApiKey(
+				"google",
+				google?.envKeys ?? [],
+			);
+		} catch {
+			console.error("Could not save Gemini setup in secure storage.");
+		}
+		delete process.env.PRODUCT_INTEL_SAVE_GEMINI_KEY;
+		for (const name of google?.envKeys ?? []) delete process.env[name];
+	}
 	if (isDiagnosticModeEnabled()) {
 		mainLogBuffer.install();
 		console.info("[diagnostic] OPENSCREEN_DIAGNOSTIC=1, capturing console.* into ring buffer");

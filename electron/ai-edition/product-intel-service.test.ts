@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_INTEL_SETTINGS } from "../../src/lib/product-intel";
 import { ProductIntelService } from "./product-intel-service";
@@ -21,6 +22,7 @@ beforeEach(async () => {
 	await fs.writeFile(media, "test-media");
 });
 afterEach(async () => {
+	vi.restoreAllMocks();
 	await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -65,6 +67,68 @@ describe("ProductIntelService", () => {
 		});
 		expect((await service().getSettings()).productBrief).toBe("A tool for small studios");
 	});
+	it("keeps the latest brief when an earlier real file write is delayed", async () => {
+		const writeFile = fs.writeFile.bind(fs);
+		let releaseEarlier: (() => void) | undefined;
+		let markStarted: (() => void) | undefined;
+		const earlierBlocked = new Promise<void>((resolve) => {
+			releaseEarlier = resolve;
+		});
+		const earlierStarted = new Promise<void>((resolve) => {
+			markStarted = resolve;
+		});
+		const writes: string[] = [];
+		vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+			const contents = String(args[1]);
+			writes.push(contents);
+			if (contents.includes('"productBrief": "Earlier context"')) {
+				markStarted?.();
+				await earlierBlocked;
+			}
+			return writeFile(...args);
+		});
+		const intel = service();
+		const earlier = intel.saveSettings({
+			...DEFAULT_INTEL_SETTINGS,
+			productBrief: "Earlier context",
+		});
+		await earlierStarted;
+		const latest = intel.saveSettings({
+			...DEFAULT_INTEL_SETTINGS,
+			productBrief: "Latest context",
+		});
+		try {
+			// An unqueued newer write finishes while the older one is blocked, then
+			// loses its context when the older temp file is finally renamed.
+			expect(await Promise.race([latest.then(() => "finished"), delay(50, "blocked")])).toBe(
+				"blocked",
+			);
+			expect(writes).toHaveLength(1);
+		} finally {
+			releaseEarlier?.();
+			await Promise.all([earlier, latest]);
+		}
+		expect((await service().getSettings()).productBrief).toBe("Latest context");
+	});
+	it("continues saving newer context after an earlier disk write rejects", async () => {
+		const writeFile = fs.writeFile.bind(fs);
+		vi.spyOn(fs, "writeFile")
+			.mockRejectedValueOnce(new Error("Disk write failed"))
+			.mockImplementation(writeFile);
+		const intel = service();
+		const failed = intel.saveSettings({
+			...DEFAULT_INTEL_SETTINGS,
+			productBrief: "Failed context",
+		});
+		const recovered = intel.saveSettings({
+			...DEFAULT_INTEL_SETTINGS,
+			productBrief: "Recovered context",
+		});
+		await expect(failed).rejects.toThrow("Disk write failed");
+		await expect(recovered).resolves.toMatchObject({ productBrief: "Recovered context" });
+		expect((await service().getSettings()).productBrief).toBe("Recovered context");
+	});
+
 	it("does not upload without a configured Gemini key", async () => {
 		const { fetcher, requests } = google();
 		await expect(service(null, fetcher).analyze("proj_1")).rejects.toThrow(/Gemini.*key/i);
@@ -85,8 +149,36 @@ describe("ProductIntelService", () => {
 		);
 		expect(body.contents[0].parts[1].text).toContain("A tool for small studios");
 		expect(body.contents[0].parts[0].fileData.fileUri).toContain("files/123");
+		expect(JSON.stringify(body.generationConfig.responseJsonSchema)).not.toContain("maxItems");
 		expect(requests.at(-1)?.init?.method).toBe("DELETE");
 		expect(JSON.stringify(report)).not.toContain("test-key");
+	});
+	it("enforces local array limits even though the wire schema omits them", async () => {
+		const base = google();
+		const fetcher: typeof fetch = async (url, init) => {
+			if (String(url).includes(":generateContent"))
+				return Response.json({
+					candidates: [
+						{
+							content: {
+								parts: [
+									{
+										text: JSON.stringify({
+											...analysis,
+											steps: Array.from({ length: 81 }, () => analysis.steps[0]),
+										}),
+									},
+								],
+							},
+						},
+					],
+				});
+			return base.fetcher(url, init);
+		};
+		const intel = service("test-key", fetcher);
+		await expect(intel.analyze("proj_1")).rejects.toThrow();
+		expect(await intel.getReport("proj_1")).toBeNull();
+		expect(base.requests.at(-1)?.init?.method).toBe("DELETE");
 	});
 	it("reuses a matching report for auto analysis and refreshes after the brief changes", async () => {
 		const { fetcher, requests } = google();

@@ -86,9 +86,15 @@ async function importBatch() {
 	await screen.findByRole("button", { name: "View Capture 1.png" });
 }
 
+async function loadExistingBatch() {
+	vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([batch]);
+	render(<ScreenshotBoard active />);
+	await screen.findByRole("button", { name: "View Capture 1.png" });
+}
+
 describe("ScreenshotBoard", () => {
 	it("keeps settings and history hidden while the primary import and analyze actions stay visible", async () => {
-		await importBatch();
+		await loadExistingBatch();
 		expect(screen.getByLabelText("Our product")).toBeVisible();
 		expect(screen.getByRole("button", { name: "Analyze screenshots" })).toBeEnabled();
 		expect(screen.getByLabelText("Model")).not.toBeVisible();
@@ -97,7 +103,7 @@ describe("ScreenshotBoard", () => {
 		expect(screen.getByLabelText("Recent research")).toBeVisible();
 	});
 	it("saves exact product context and shows grouped AI names, three advices and enlarged evidence", async () => {
-		await importBatch();
+		await loadExistingBatch();
 		fireEvent.change(screen.getByLabelText("Our product"), {
 			target: { value: "Our quirky product words." },
 		});
@@ -130,8 +136,9 @@ describe("ScreenshotBoard", () => {
 		fireEvent.drop(screen.getByRole("region", { name: "Screenshot research" }), {
 			dataTransfer: { files: [new File(["pixels"], "one.png", { type: "image/png" })] },
 		});
-		await screen.findByRole("button", { name: "View Capture 1.png" });
+		await screen.findByRole("button", { name: "View AI name 1" });
 		expect(nativeBridgeClient.screenshotIntel.import).toHaveBeenCalledWith(["/tmp/one.png"]);
+		expect(nativeBridgeClient.screenshotIntel.analyze).toHaveBeenCalledExactlyOnceWith(batch.id);
 	});
 	it("keeps key setup hidden until Analyze reveals it and focuses the field", async () => {
 		vi.mocked(nativeBridgeClient.productIntel.snapshot).mockResolvedValue({
@@ -161,7 +168,6 @@ describe("ScreenshotBoard", () => {
 			new Error("Gemini quota exceeded"),
 		);
 		await importBatch();
-		fireEvent.click(screen.getByRole("button", { name: "Analyze screenshots" }));
 		await screen.findByRole("alert");
 		expect(screen.getByRole("alert")).toHaveTextContent("Gemini quota exceeded");
 		expect(screen.getByRole("button", { name: "View Capture 1.png" })).toBeVisible();
@@ -221,5 +227,65 @@ describe("ScreenshotBoard", () => {
 		);
 		expect(screen.getByRole("button", { name: "Analyze screenshots" })).toBeDisabled();
 		expect(screen.getByLabelText("Gemini API key")).not.toBeVisible();
+	});
+	it("automatically analyzes a newly picked batch with current context while showing the imported images", async () => {
+		let finish: ((result: ScreenshotBatch) => void) | undefined;
+		vi.mocked(nativeBridgeClient.screenshotIntel.analyze).mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		render(<ScreenshotBoard active />);
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Add screenshots" })).toBeEnabled(),
+		);
+		fireEvent.change(screen.getByLabelText("Our product"), {
+			target: { value: "Our exact current context" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Add screenshots" }));
+		await screen.findByRole("button", { name: "View Capture 1.png" });
+		await waitFor(() =>
+			expect(nativeBridgeClient.screenshotIntel.analyze).toHaveBeenCalledExactlyOnceWith(batch.id),
+		);
+		expect(nativeBridgeClient.productIntel.saveSettings).toHaveBeenCalledWith(
+			expect.objectContaining({ productBrief: "Our exact current context" }),
+		);
+		expect(screen.getByRole("button", { name: "Analyzing screenshots…" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
+		finish?.(analyzed);
+		await screen.findByText("Setup uses focused choices.");
+		expect(screen.getByRole("button", { name: "Open organized folder" })).toBeVisible();
+	});
+	it("does not analyze restored or selected recent batches", async () => {
+		const other = {
+			...batch,
+			id: "batch_00000000-0000-0000-0000-000000000002",
+			title: "Other research",
+		};
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([batch, other]);
+		vi.mocked(nativeBridgeClient.screenshotIntel.get).mockResolvedValue(other);
+		render(<ScreenshotBoard active />);
+		await screen.findByRole("button", { name: "View Capture 1.png" });
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByText("More", { selector: "summary" }));
+		fireEvent.change(screen.getByLabelText("Recent research"), { target: { value: other.id } });
+		await waitFor(() => expect(screen.getByLabelText("Recent research")).toHaveValue(other.id));
+		expect(nativeBridgeClient.screenshotIntel.get).toHaveBeenCalledWith(other.id);
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+	});
+	it("does not analyze when the screenshot picker is cancelled", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.pick).mockResolvedValue(null);
+		render(<ScreenshotBoard active />);
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Add screenshots" })).toBeEnabled(),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Add screenshots" }));
+		await waitFor(() => expect(nativeBridgeClient.screenshotIntel.pick).toHaveBeenCalledOnce());
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Add screenshots" })).toBeEnabled(),
+		);
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+		expect(nativeBridgeClient.productIntel.saveSettings).not.toHaveBeenCalled();
 	});
 });

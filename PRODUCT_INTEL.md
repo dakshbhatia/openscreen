@@ -1,8 +1,8 @@
 # Product intelligence
 
-This branch turns competitor screenshots or an OpenScreen recording into contextual product research. Drop screenshots, describe your product, connect Gemini, and analyze. Screenshot reports propose names and groups, explain visible evidence, and suggest product experiments. Recording reports add source timestamps. The main findings are ordered by relevance to the supplied product brief.
+This branch turns competitor screenshots or an OpenScreen recording into contextual product research. Describe your product, connect Gemini once, then drop screenshots to analyze and organize automatically. Screenshot reports propose names and groups, explain visible evidence, and suggest product experiments. Recording reports add source timestamps. The main findings are ordered by relevance to the supplied product brief.
 
-This is a personal local Mac build. Live Gemini analysis has not been verified in this development session because no API key was available. Model availability, account quota, and results from real recordings still need a live check. This branch does not provide a competitor library or comparisons across saved competitors.
+This is a personal local Mac build. Live Gemini 3.8 Flash analysis passed for a six-image batch and a synthetic two-second video. Screenshot naming, grouping and organized copies were verified in the packaged app, including connection persistence after restart. The video service returned source timestamps and confirmed remote-file deletion. Real screen capture, audio/camera and long-recording analysis still need a device-level pass. This branch does not provide a competitor library or comparisons across saved competitors.
 
 ## Ten foundational changes
 
@@ -30,9 +30,9 @@ npm run build:intel:mac
 
 The build produces a local app bundle under `release/2.0.0/`. The command uses `--publish never`; it does not publish a release. For development after setup, run `npm run dev`.
 
-The fork uses its own `product-intel` application data directory, separate from an existing OpenScreen installation.
+The fork uses its own `product-intel` application data directory, separate from an existing OpenScreen installation. Keys are saved with Electron OS encryption, never as plaintext. For a one-time local provisioning run, an administrator can set `PRODUCT_INTEL_SAVE_GEMINI_KEY=1` and a supported Google key environment variable when launching the app executable. This preserves an existing stored key, clears the bootstrap environment before provider initialization, and refuses storage if OS encryption is unavailable. Keep credentials out of shell arguments and source files. Normal launches use the encrypted saved key.
 
-The app opens directly into a minimal research workspace. **Screenshots** is the default input; **Recording** retains the screen recorder and video import. Add your audience, job to be done, constraints, and differentiators under **Our product**, then analyze. Gemini connection setup stays under **More**, or **Research settings** in recordings; Analyze reveals it when a key is missing. Additional context, model/custom prompts, history, and the full editor remain available under **More**.
+The app opens directly into a minimal research workspace. **Screenshots** is the default input; **Recording** retains the screen recorder and video import. Add your audience, job to be done, constraints, and differentiators under **Our product**, then drop a new screenshot batch. Connected imports analyze and organize automatically; restored or selected history batches do not re-upload. Analyze reruns a batch after context changes. Gemini connection setup stays under **More**, or **Research settings** in recordings; Analyze reveals it when a key is missing. Additional context, model/custom prompts, history, and the full editor remain available under **More**.
 
 Screenshot batches accept up to 24 PNG/JPEG/WebP images, 8 MB each and 24 MB combined. The app copies them into its local library and sends resized images to Gemini vision. It validates that every supplied image is described exactly once. Names and semantic groups apply to organized copies, preserving your original files. Unordered images do not establish click order, transitions, or task completion. Use **Open organized folder** after analysis to find the grouped, named copies.
 
@@ -40,7 +40,7 @@ Timestamp links seek within the original source recording, independent of timeli
 
 ## Data and limits
 
-Analysis sends the complete source recording and supplied context to Google using the connected key and API quota. Automatic analysis is optional and applies to new recordings. Settings and reports are saved locally. The service attempts to delete the uploaded remote file after the request; the report records whether deletion was confirmed.
+Analysis sends resized screenshots or the complete source recording, together with supplied context, to Google using the connected key and API quota. New screenshot imports analyze automatically when connected. Automatic recording analysis is optional and applies to new recordings. Settings and reports are saved locally. The service attempts to delete the uploaded remote file after the request; the report records whether deletion was confirmed.
 
 A recording can show a product interaction. It cannot establish conversion, retention, revenue, backend implementation, or causal impact. The default prompt asks for feasible experiments and context-fit tradeoffs without invented baselines or projected lift. Low-confidence findings and unknowns need follow-up evidence. Review reports before sharing them, especially when a recording contains personal or confidential information.
 

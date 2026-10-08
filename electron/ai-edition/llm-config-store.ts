@@ -83,6 +83,15 @@ export class LlmConfigStore {
 		this.loadSync();
 	}
 
+	/** Explicit setup can copy an environment key into OS-encrypted storage once. */
+	async importEnvironmentApiKey(providerId: string, envKeys: string[]): Promise<boolean> {
+		if (this.getCredential(providerId)) return false;
+		const apiKey = envKeys.map((name) => process.env[name]?.trim()).find(Boolean);
+		if (!apiKey) return false;
+		await this.setCredential(providerId, { kind: "api-key", apiKey });
+		return true;
+	}
+
 	getConfig(): LlmConfig | null {
 		return this.config;
 	}
