@@ -331,6 +331,15 @@ describe("SttManager", () => {
 		expect(languages.slice(1).every((l) => l === "en")).toBe(true);
 	});
 
+	it("hands the names and terms to every chunk, not only the first", async () => {
+		const mgr = new SttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		await mgr.transcribe({ samples: new Float32Array(200 * 16000), prompt: "OpenScreen, Vulkan" });
+		const prompts = fakeWhisperServer.transcribe.mock.calls.map(([req]) => req.prompt);
+		expect(prompts.length).toBeGreaterThan(1);
+		expect(prompts.every((p) => p === "OpenScreen, Vulkan")).toBe(true);
+	});
+
 	it("retries a failed chunk instead of losing the whole transcription", async () => {
 		fakeWhisperServer.transcribe.mockRejectedValueOnce(new Error("helper died")).mockResolvedValue({
 			segments: [{ text: "hello", startSec: 0, endSec: 0.5 }],

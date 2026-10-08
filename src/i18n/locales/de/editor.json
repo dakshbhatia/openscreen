@@ -163,6 +163,7 @@
 		"cpuBackendHint": "Läuft auf der CPU: etwa 2× langsamer als auf der GPU",
 		"noTranscript": "Kein Transkript",
 		"regenerateAs": "Neu erzeugen als",
+		"namesAndTerms": "Namen und Begriffe",
 		"auto": "Auto",
 		"regenerate": "Neu erzeugen",
 		"regenerateTip": "Neu erzeugen: in der gewählten Sprache erneut transkribieren",

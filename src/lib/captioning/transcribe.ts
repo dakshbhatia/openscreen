@@ -52,7 +52,7 @@ export interface SttRendererStatus {
 }
 
 interface RendererSttApi {
-	transcribe: (request: { samples: Float32Array; language?: string }) => Promise<{
+	transcribe: (request: { samples: Float32Array; language?: string; prompt?: string }) => Promise<{
 		segments: CaptionSegment[];
 		wordSegments: SttWordSegment[];
 		detectedLanguage: string;
@@ -103,6 +103,8 @@ export interface TranscribeOptions {
 	onStatus?: (status: SttRendererStatus) => void;
 	signal?: AbortSignal;
 	language?: string;
+	/** Names and terms to bias Whisper toward (the project's vocabulary). */
+	prompt?: string;
 }
 
 function runTranscription(
@@ -135,7 +137,7 @@ function runTranscription(
 	// trimmed leading silence with a peak detector and got false positives on
 	// quiet music intros / room tone. VAD or nothing.
 	return api
-		.transcribe({ ...payload, language: forcedLanguage })
+		.transcribe({ ...payload, language: forcedLanguage, prompt: options?.prompt })
 		.then((result) => {
 			const words = result.wordSegments ?? [];
 			let segments: CaptionSegment[];

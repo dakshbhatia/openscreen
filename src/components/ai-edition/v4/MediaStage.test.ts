@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AxcutTranscript } from "@/lib/ai-edition/schema";
-import { addSelectedAssetToTimeline, detectedLanguageForTranscript } from "./MediaStage";
+import {
+	type AxcutTranscript,
+	createEmptyDocument,
+	parseDocumentFile,
+} from "@/lib/ai-edition/schema";
+import {
+	addSelectedAssetToTimeline,
+	detectedLanguageForTranscript,
+	VOCABULARY_MAX_CHARS,
+	withVocabulary,
+} from "./MediaStage";
 
 function transcript(language: string, text = ""): AxcutTranscript {
 	return {
@@ -83,5 +92,32 @@ describe("addSelectedAssetToTimeline", () => {
 
 		expect(onAdd).not.toHaveBeenCalled();
 		expect(onSuccess).not.toHaveBeenCalled();
+	});
+});
+
+describe("withVocabulary", () => {
+	const empty = createEmptyDocument({ projectId: "p1", title: "Demo" });
+
+	it("stores the trimmed names and terms on the project, and they survive a save", () => {
+		const next = withVocabulary(empty, "  OpenScreen, whisper.cpp\n");
+		expect(next?.project.vocabulary).toBe("OpenScreen, whisper.cpp");
+		const reloaded = parseDocumentFile(JSON.parse(JSON.stringify(next)));
+		expect(reloaded.project.vocabulary).toBe("OpenScreen, whisper.cpp");
+	});
+
+	it("returns null when nothing changed, so a blur does not add an undo step", () => {
+		expect(withVocabulary(empty, "   ")).toBeNull();
+		const set = withVocabulary(empty, "Vulkan");
+		expect(set && withVocabulary(set, "Vulkan ")).toBeNull();
+	});
+
+	it("clears the field back to no prompt", () => {
+		const set = withVocabulary(empty, "Vulkan");
+		expect(set && withVocabulary(set, "")?.project.vocabulary).toBeUndefined();
+	});
+
+	it("caps what reaches Whisper", () => {
+		const next = withVocabulary(empty, "x".repeat(VOCABULARY_MAX_CHARS + 50));
+		expect(next?.project.vocabulary).toHaveLength(VOCABULARY_MAX_CHARS);
 	});
 });

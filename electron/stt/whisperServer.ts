@@ -85,6 +85,8 @@ export interface WhisperServerStatus {
 export interface TranscribeOptions {
 	samples: Float32Array;
 	language?: string;
+	/** Names and terms to bias the decode toward (whisper's initial prompt). */
+	prompt?: string;
 	/** The aligner model for a language, or null for none (see `transcribe`). */
 	alignerFor?: (language: string) => Promise<string | null>;
 }
@@ -484,6 +486,7 @@ export class WhisperServerManager {
 	private async runMultipartInfer(opts: {
 		wavPath: string;
 		language?: string;
+		prompt?: string;
 	}): Promise<WhisperJsonResponse> {
 		await this.ensureReady();
 		const url = `${this.baseUrl()}/inference`;
@@ -493,6 +496,8 @@ export class WhisperServerManager {
 		form.set("file", blob, path.basename(opts.wavPath));
 		form.set("response_format", "verbose_json");
 		form.set("language", opts.language && opts.language !== "auto" ? opts.language : "auto");
+		const prompt = opts.prompt?.trim();
+		if (prompt) form.set("prompt", prompt);
 		let res: Response;
 		try {
 			res = await fetch(url, {
@@ -612,7 +617,11 @@ export class WhisperServerManager {
 	}> {
 		const wavPath = await writeSamplesAsWav(opts.samples);
 		try {
-			const json = await this.runMultipartInfer({ wavPath, language: opts.language });
+			const json = await this.runMultipartInfer({
+				wavPath,
+				language: opts.language,
+				prompt: opts.prompt,
+			});
 			const raw = json.segments ?? [];
 			const segments: SttPhraseSegment[] = raw
 				.map((seg) => {

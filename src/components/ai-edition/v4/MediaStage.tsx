@@ -3,7 +3,12 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
-import type { AxcutAsset, AxcutTranscript, TranscriptLanguageCode } from "@/lib/ai-edition/schema";
+import type {
+	AxcutAsset,
+	AxcutDocument,
+	AxcutTranscript,
+	TranscriptLanguageCode,
+} from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
@@ -48,6 +53,19 @@ export function detectedLanguageForTranscript(transcript: AxcutTranscript | null
 	return transcript.language;
 }
 
+/**
+ * Whisper reads at most the last 223 tokens of its prompt; 600 characters of
+ * names and terms stays under that for Latin scripts (issue #1023).
+ */
+export const VOCABULARY_MAX_CHARS = 600;
+
+/** The document with its names and terms set, or null when nothing changed. */
+export function withVocabulary(document: AxcutDocument, text: string): AxcutDocument | null {
+	const vocabulary = text.trim().slice(0, VOCABULARY_MAX_CHARS) || undefined;
+	if (vocabulary === document.project.vocabulary) return null;
+	return { ...document, project: { ...document.project, vocabulary } };
+}
+
 export async function addSelectedAssetToTimeline(
 	selected: Pick<AxcutAsset, "id" | "label" | "originalPath"> | null,
 	onAddToTimeline: (assetId: string) => Promise<void>,
@@ -68,6 +86,7 @@ export function MediaStage({
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
 	const addAsset = useProjectStore((s) => s.addAsset);
+	const saveDocument = useProjectStore((s) => s.saveDocument);
 	// Transcripts are produced in the background as soon as a media lands here
 	// (see transcriptionStore) — this stage only reports where each one is at,
 	// and lets the user force a re-run in another language.
@@ -387,6 +406,46 @@ export function MediaStage({
 									{failureHintKey ? t(failureHintKey) : selectedTranscription.failure.message}
 								</p>
 							) : null}
+
+							{/* Project-wide: whisper's initial prompt for every run (issue #1023).
+							    Uncontrolled and keyed on the saved value, so an undo that restores
+							    an older list shows it; the save happens on blur, one undo step. */}
+							<label style={{ display: "block", marginBottom: 12 }}>
+								<span
+									style={{
+										display: "block",
+										fontSize: 12.5,
+										fontWeight: 600,
+										color: "var(--fg-2)",
+										marginBottom: 6,
+									}}
+								>
+									{t("mediaStage.namesAndTerms")}
+								</span>
+								<textarea
+									key={`${document?.project.id}:${document?.project.vocabulary ?? ""}`}
+									defaultValue={document?.project.vocabulary ?? ""}
+									maxLength={VOCABULARY_MAX_CHARS}
+									rows={2}
+									spellCheck={false}
+									onBlur={(e) => {
+										const next = document && withVocabulary(document, e.target.value);
+										if (next) void saveDocument(next, { history: true });
+									}}
+									style={{
+										width: "100%",
+										padding: "8px 10px",
+										borderRadius: 9,
+										border: "1px solid var(--border)",
+										background: "var(--surface-2)",
+										color: "var(--fg)",
+										fontSize: 12.5,
+										lineHeight: 1.5,
+										resize: "vertical",
+										outline: "none",
+									}}
+								/>
+							</label>
 
 							<div style={{ marginBottom: 12 }}>
 								<div

@@ -291,12 +291,18 @@ export class SttManager {
 	private async transcribeChunk(
 		samples: Float32Array,
 		language: string | undefined,
+		prompt: string | undefined,
 	): Promise<Awaited<ReturnType<WhisperServerManager["transcribe"]>>> {
 		let lastError: unknown;
 		for (let attempt = 1; attempt <= CHUNK_ATTEMPTS; attempt++) {
 			if (this.shuttingDown) throw cancelledError();
 			try {
-				return await this.server.transcribe({ samples, language, alignerFor: this.alignerFor });
+				return await this.server.transcribe({
+					samples,
+					language,
+					prompt,
+					alignerFor: this.alignerFor,
+				});
 			} catch (error) {
 				lastError = error;
 				if (this.shuttingDown) throw cancelledError();
@@ -387,6 +393,7 @@ export class SttManager {
 			const result = await this.transcribeChunk(
 				samples.subarray(chunk.startSample, chunk.endSample),
 				language,
+				req.prompt,
 			).catch((error) => {
 				if (error instanceof Error && error.name === "AbortError") throw error;
 				// Say where it died. Without this the user gets "Transcription

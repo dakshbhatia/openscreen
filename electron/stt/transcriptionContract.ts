@@ -129,6 +129,11 @@ export interface SttTranscribeRequest {
 	 * The spec locks language detection on by default; we only honour an explicit value.
 	 */
 	language?: string;
+	/**
+	 * The project's names and terms (issue #1023), handed to Whisper as its
+	 * initial prompt on every chunk. Omit or leave blank for none.
+	 */
+	prompt?: string;
 }
 
 /**

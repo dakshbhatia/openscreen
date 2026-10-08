@@ -255,7 +255,11 @@ describe("WhisperServerManager", () => {
 	});
 
 	describe("WhisperServerManager language normalization", () => {
-		function captureFormField(language: string | undefined): Promise<string | null> {
+		function captureFormField(
+			language: string | undefined,
+			prompt?: string,
+			field = "language",
+		): Promise<string | null> {
 			return new Promise((resolve, reject) => {
 				let resolvedText: string | null = null;
 				const fakeJson = {
@@ -268,7 +272,7 @@ describe("WhisperServerManager", () => {
 					vi.fn(async (_url: string, init: RequestInit) => {
 						const body = init?.body as FormData | undefined;
 						if (body && typeof (body as FormData).get === "function") {
-							resolvedText = (body as FormData).get("language") as string | null;
+							resolvedText = (body as FormData).get(field) as string | null;
 						}
 						return new Response(JSON.stringify(fakeJson), { status: 200 });
 					}),
@@ -281,6 +285,7 @@ describe("WhisperServerManager", () => {
 						await mgr.transcribe({
 							samples: new Float32Array(1600),
 							language,
+							prompt,
 						});
 						resolve(resolvedText);
 					} catch (e) {
@@ -303,6 +308,16 @@ describe("WhisperServerManager", () => {
 		it("passes through an explicit ISO 639-1 code like 'fr' unchanged", async () => {
 			const sent = await captureFormField("fr");
 			expect(sent).toBe("fr");
+		});
+
+		it("sends the project's names and terms as the prompt field, trimmed", async () => {
+			const sent = await captureFormField("auto", "  OpenScreen, whisper.cpp \n", "prompt");
+			expect(sent).toBe("OpenScreen, whisper.cpp");
+		});
+
+		it("sends no prompt field when the names and terms are blank", async () => {
+			expect(await captureFormField("auto", undefined, "prompt")).toBeNull();
+			expect(await captureFormField("auto", "   ", "prompt")).toBeNull();
 		});
 
 		afterEach(() => {

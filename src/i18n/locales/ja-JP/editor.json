@@ -156,6 +156,7 @@
 		"close": "閉じる",
 		"transcriptReady": "文字起こし完了",
 		"regenerateAs": "この言語で再生成",
+		"namesAndTerms": "固有名詞と用語",
 		"auto": "自動",
 		"regenerate": "再生成",
 		"regenerateTip": "再生成：選んだ言語でもう一度文字起こしします",

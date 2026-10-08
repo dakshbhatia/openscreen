@@ -613,6 +613,9 @@ const documentSchemaShape = z.object({
 		createdAt: isoDateSchema,
 		updatedAt: isoDateSchema,
 		primaryAssetId: z.string().optional(),
+		// Names and terms passed to Whisper as its initial prompt (issue #1023).
+		// Additive, so no schemaVersion bump: an older build drops the key on save.
+		vocabulary: z.string().optional(),
 	}),
 	assets: z.array(assetSchema).default([]),
 	transcript: transcriptSchema.nullable().default(null),

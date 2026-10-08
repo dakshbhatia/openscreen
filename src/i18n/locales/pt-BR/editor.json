@@ -156,6 +156,7 @@
 		"close": "Fechar",
 		"transcriptReady": "Transcrição pronta",
 		"regenerateAs": "Regenerar em",
+		"namesAndTerms": "Nomes e termos",
 		"auto": "Automático",
 		"regenerate": "Regenerar",
 		"regenerateTip": "Regenerar: transcrever de novo no idioma escolhido",

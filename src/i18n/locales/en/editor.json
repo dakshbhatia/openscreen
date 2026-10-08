@@ -163,6 +163,7 @@
 		"cpuBackendHint": "Running on the CPU: about 2× slower than on the GPU",
 		"noTranscript": "No transcript",
 		"regenerateAs": "Regenerate as",
+		"namesAndTerms": "Names and terms",
 		"auto": "Auto",
 		"regenerate": "Regenerate",
 		"regenerateTip": "Regenerate: transcribe again in the chosen language",

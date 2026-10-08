@@ -215,6 +215,23 @@ describe("transcribeAsset native extraction", () => {
 		expect(transcript.segments.length).toBeGreaterThan(0);
 	});
 
+	it("passes the project's names and terms on both paths", async () => {
+		const doc = makeDoc();
+		doc.project.vocabulary = "OpenScreen, Kubernetes";
+		transcribeMock.mockRejectedValueOnce(
+			new Error(`${STT_NATIVE_EXTRACTION_UNAVAILABLE}: no ffmpeg binary`),
+		);
+		rendererMock.mockResolvedValueOnce({
+			segments: [],
+			granularity: "word",
+			detectedLanguage: "en",
+		});
+		await transcribeAsset(doc, "asset_1");
+		const withPrompt = expect.objectContaining({ prompt: "OpenScreen, Kubernetes" });
+		expect(transcribeMock).toHaveBeenCalledWith("/tmp/demo.mp4", withPrompt);
+		expect(rendererMock).toHaveBeenCalledWith(expect.anything(), withPrompt);
+	});
+
 	it("does NOT fall back on any other failure", async () => {
 		// "This file has no audio" is a verdict. Re-deriving it in the renderer would buy
 		// the same answer for the price of the decode this change exists to avoid.

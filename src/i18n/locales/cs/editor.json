@@ -163,6 +163,7 @@
 		"cpuBackendHint": "Běží na CPU: přibližně 2× pomalejší než na GPU",
 		"noTranscript": "Žádný přepis",
 		"regenerateAs": "Znovu generovat jako",
+		"namesAndTerms": "Jména a pojmy",
 		"auto": "Automaticky",
 		"regenerate": "Znovu generovat",
 		"regenerateTip": "Znovu generovat: znovu přepsat ve zvoleném jazyce",
