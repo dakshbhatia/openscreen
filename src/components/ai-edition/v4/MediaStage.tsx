@@ -1,5 +1,5 @@
 import { ArrowDown, Film, Plus, RotateCw, Search, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
@@ -9,7 +9,7 @@ import type {
 	AxcutTranscript,
 	TranscriptLanguageCode,
 } from "@/lib/ai-edition/schema";
-import { useProjectStore, waitForDocumentSaves } from "@/lib/ai-edition/store/projectStore";
+import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
 	useTranscriptionStore,
@@ -87,6 +87,7 @@ export function MediaStage({
 	const document = useProjectStore((s) => s.document);
 	const addAsset = useProjectStore((s) => s.addAsset);
 	const saveDocument = useProjectStore((s) => s.saveDocument);
+	const vocabularySave = useRef<Promise<boolean>>(undefined);
 	// Transcripts are produced in the background as soon as a media lands here
 	// (see transcriptionStore) — this stage only reports where each one is at,
 	// and lets the user force a re-run in another language.
@@ -433,7 +434,7 @@ export function MediaStage({
 										// document, so a stale one would undo a transcript written meanwhile.
 										const latest = useProjectStore.getState().document;
 										const next = latest && withVocabulary(latest, e.target.value);
-										if (next) void saveDocument(next, { history: true });
+										if (next) vocabularySave.current = saveDocument(next, { history: true });
 									}}
 									style={{
 										width: "100%",
@@ -498,8 +499,11 @@ export function MediaStage({
 													? undefined
 													: async () => {
 															// Clicking here blurs the terms field, whose save is still in
-															// flight: the run must read the terms it just saved.
-															if ((await waitForDocumentSaves()) === "timeout") return;
+															// flight: the run must read the terms it just saved, so a failed
+															// save (already toasted) runs nothing.
+															const saving = vocabularySave.current;
+															vocabularySave.current = undefined;
+															if ((await saving) === false) return;
 															void requestTranscription(selected.id, lang);
 														}
 											}
