@@ -1684,6 +1684,10 @@
 	border-radius: 0 7px 7px 0;
 	background: linear-gradient(90deg, color-mix(in oklab, var(--_c) 55%, transparent), transparent);
 }
+/* The pan between chained zooms: the camera moves the whole way, so no fade. */
+.zoomTrail[data-zoom-trail="pan"] {
+	background: color-mix(in oklab, var(--_c) 40%, transparent);
+}
 .zoomTrailCut {
 	position: absolute;
 	top: 0;

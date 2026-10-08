@@ -10,6 +10,11 @@ export const ZOOM_TRANSITION_PER_LN_MS = 550;
 export function zoomTransitionMs(scale: number): number {
 	return ZOOM_TRANSITION_BASE_MS + ZOOM_TRANSITION_PER_LN_MS * Math.log(Math.max(1, scale));
 }
+// Two zooms at most this far apart on screen are chained: no zoom-out and back in, the camera
+// pans from one to the other over CONNECTED_ZOOM_PAN_DURATION_MS of screen time from the first
+// one's end. Mirror of `CHAINED_ZOOM_PAN_GAP_S` / `CONNECTED_ZOOM_PAN_DURATION_S` (regions.rs).
+export const CHAINED_ZOOM_PAN_GAP_MS = 1500;
+export const CONNECTED_ZOOM_PAN_DURATION_MS = 1000;
 export const SMOOTHING_FACTOR = 0.12;
 export const ZOOM_TRANSLATION_DEADZONE_PX = 1.25;
 export const ZOOM_SCALE_DEADZONE = 0.002;

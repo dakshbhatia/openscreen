@@ -37,7 +37,8 @@
 		"zoomIn": "Yakınlaşma: görüntü, yakınlaştırma başlayana kadar yaklaşır",
 		"zoomOut": "Uzaklaşma: görüntü, yakınlaştırma bittikten sonra yeniden uzaklaşır",
 		"zoomInCut": "Bir kırpma, yakınlaşmanın {{seconds}} sn'sini kaldırır. Dışa aktarım kesimde atlar.",
-		"zoomOutCut": "Bir kırpma, uzaklaşmanın {{seconds}} sn'sini kaldırır. Dışa aktarım kesimde atlar."
+		"zoomOutCut": "Bir kırpma, uzaklaşmanın {{seconds}} sn'sini kaldırır. Dışa aktarım kesimde atlar.",
+		"pan": "Kaydırma: görüntü doğrudan sonraki yakınlaştırmaya geçer"
 	},
 	"emptyState": {
 		"noVideo": "Video Yüklenmedi",

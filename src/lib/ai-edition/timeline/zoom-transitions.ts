@@ -6,11 +6,15 @@
 // off them: the render drops the trimmed frames, so the camera jumps at the cut instead of
 // easing.
 //
-// Chained zooms (closer than 1.5 s, panned between) are measured as if apart. That is the
-// right answer for trims: a trim between two zooms splits them into separate segments, which
-// breaks the chain, and each then needs its own windows untrimmed.
+// Chained zooms (closer than 1.5 s on screen) have no zoom-out and zoom-in between them: the
+// camera pans from one to the other instead (`chainedPans`). A trim between two zooms splits
+// them into separate segments, which breaks the chain, so each then has its own windows.
 
-import { zoomTransitionMs } from "../../zoomMath/constants";
+import {
+	CHAINED_ZOOM_PAN_GAP_MS,
+	CONNECTED_ZOOM_PAN_DURATION_MS,
+	zoomTransitionMs,
+} from "../../zoomMath/constants";
 import { type SpeedRegion, screenTimeMs, timelineTimeMs } from "./speed";
 import { ZOOM_DEPTH_SCALES } from "./zoom-scale";
 
@@ -74,4 +78,47 @@ export function transitionCutsMs(
 		}
 	}
 	return { inMs: resumesAt - transitions.inFromMs, outMs: transitions.outUntilMs - jumpsAt };
+}
+
+export interface ChainedPan {
+	/** Index of the zoom the pan leaves from its end: it has no zoom-out. */
+	from: number;
+	/** Index of the zoom the pan reaches: it has no zoom-in. */
+	to: number;
+	/** Timeline ms where the pan is over. It can run into the next zoom's span. */
+	untilMs: number;
+}
+
+/**
+ * The pans between chained zooms (mirror of `connected_pairs`, regions.rs): two consecutive
+ * zooms at most 1.5 s apart on screen, panned between over 1 s of SCREEN time from the first
+ * one's end. The compositor renders each clip segment on its own, so a cut between them
+ * (a trim, or a clip junction as a zero-length span) breaks the chain, and a zoom entirely
+ * under a trim takes no part in one.
+ */
+export function chainedPans(
+	zooms: readonly Span[],
+	speedRegions: readonly SpeedRegion[],
+	cuts: readonly Span[],
+): ChainedPan[] {
+	const order = zooms
+		.map((_, i) => i)
+		.filter((i) => !cuts.some((c) => c.startMs <= zooms[i].startMs && c.endMs >= zooms[i].endMs))
+		.sort((a, b) => zooms[a].startMs - zooms[b].startMs);
+	return order.slice(1).flatMap((to, k) => {
+		const from = order[k];
+		const panFrom = screenTimeMs(speedRegions, zooms[from].endMs);
+		const chained =
+			screenTimeMs(speedRegions, zooms[to].startMs) - panFrom <= CHAINED_ZOOM_PAN_GAP_MS &&
+			!cuts.some((c) => c.startMs <= zooms[to].startMs && c.endMs >= zooms[from].endMs);
+		return chained
+			? [
+					{
+						from,
+						to,
+						untilMs: timelineTimeMs(speedRegions, panFrom + CONNECTED_ZOOM_PAN_DURATION_MS),
+					},
+				]
+			: [];
+	});
 }

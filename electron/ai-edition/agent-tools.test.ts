@@ -2605,6 +2605,56 @@ describe("zoom transitions are reported, not hidden (#1028)", () => {
 		]);
 	});
 
+	it("reports two zooms closer than 1.5 s as one pan, not a zoom-out and back in", () => {
+		const chained = run(zoomedAt10to12().document, "addZoom", {
+			startSec: 12.5,
+			endSec: 14,
+			depth: 3,
+		});
+		const [first, second] = run(chained.document, "getCurrentDocument", {}).payload.zoomRanges;
+		expect(first).toMatchObject({ panToZoomId: second.id, panUntilSec: 13 });
+		expect(first.zoomOutUntilSec).toBeUndefined();
+		expect(first.zoomInFromSec).toBe(10 - MOVE_SEC);
+		expect(second.panFromZoomId).toBe(first.id);
+		expect(second.zoomInFromSec).toBeUndefined();
+		expect(second.zoomOutUntilSec).toBe(14 + MOVE_SEC);
+	});
+
+	it("warns of both moves when a trim between two chained zooms breaks the chain", () => {
+		const chained = run(zoomedAt10to12().document, "addZoom", {
+			startSec: 12.5,
+			endSec: 14,
+			depth: 3,
+		});
+		const trimmed = run(chained.document, "addTrim", { startSec: 12, endSec: 12.5 });
+		const [first, second] = run(trimmed.document, "getCurrentDocument", {}).payload.zoomRanges;
+		expect(first.panToZoomId).toBeUndefined();
+		expect(trimmed.payload.cutTransitions).toEqual([
+			{ zoomId: first.id, side: "out", cutSec: MOVE_SEC },
+			{ zoomId: second.id, side: "in", cutSec: MOVE_SEC },
+		]);
+	});
+
+	it("does not chain zooms across a clip junction", () => {
+		const base = shortSingleClip();
+		const clip = base.timeline.clips[0];
+		const twoClips: AxcutDocument = {
+			...base,
+			timeline: {
+				...base.timeline,
+				clips: [
+					{ ...clip, sourceEndSec: 12, timelineEndSec: 12 },
+					{ ...clip, id: "clip_2", sourceStartSec: 12, timelineStartSec: 12 },
+				],
+			},
+		};
+		const first = run(twoClips, "addZoom", { startSec: 10, endSec: 12, depth: 3 });
+		const both = run(first.document, "addZoom", { startSec: 12.5, endSec: 14, depth: 3 });
+		const zooms = run(both.document, "getCurrentDocument", {}).payload.zoomRanges;
+		expect(zooms[0].panToZoomId).toBeUndefined();
+		expect(zooms[0].zoomOutUntilSec).toBe(12 + MOVE_SEC);
+	});
+
 	it("stretches the zoom-out across a speed region, and catches a trim placed there", () => {
 		const sped = run(zoomedAt10to12().document, "addSpeed", { startSec: 12, endSec: 20, speed: 3 });
 		expect(snapshotZoom(sped.document).zoomOutUntilSec).toBe(14.77);

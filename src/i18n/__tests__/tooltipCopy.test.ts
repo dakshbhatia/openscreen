@@ -42,7 +42,13 @@ const TOOLTIP_KEYS: Record<string, string[]> = {
 		"deviceSettings.title",
 		"deviceSettings.close",
 	],
-	timeline: ["trails.zoomIn", "trails.zoomOut", "trails.zoomInCut", "trails.zoomOutCut"],
+	timeline: [
+		"trails.zoomIn",
+		"trails.zoomOut",
+		"trails.zoomInCut",
+		"trails.zoomOutCut",
+		"trails.pan",
+	],
 };
 
 function read(locale: string, namespace: string, key: string): string {

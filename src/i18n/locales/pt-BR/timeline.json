@@ -37,7 +37,8 @@
 		"zoomIn": "Aproximação: a visão se aproxima até o início do zoom",
 		"zoomOut": "Afastamento: a visão se afasta de novo após o fim do zoom",
 		"zoomInCut": "Um recorte remove {{seconds}} s da aproximação. A exportação salta no corte.",
-		"zoomOutCut": "Um recorte remove {{seconds}} s do afastamento. A exportação salta no corte."
+		"zoomOutCut": "Um recorte remove {{seconds}} s do afastamento. A exportação salta no corte.",
+		"pan": "Panorâmica: a visão vai direto para o próximo zoom"
 	},
 	"emptyState": {
 		"noVideo": "Nenhum Vídeo Carregado",

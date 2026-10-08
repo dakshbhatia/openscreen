@@ -1094,7 +1094,7 @@ describe("V4Timeline zoom trails", () => {
 	const W_SEC = zoomTransitionMs(1.8) / 1000; // ≈ 0.92 s at the default depth
 	const ZOOM = { id: "z1", startMs: 10_000, endMs: 12_000, depth: 3 };
 	const pct = (sec: number) => (sec / TOTAL_SEC) * 100;
-	const trail = (side: "in" | "out") =>
+	const trail = (side: "in" | "out" | "pan") =>
 		document.querySelector<HTMLElement>(`[data-zoom-trail="${side}"]`) as HTMLElement;
 
 	function renderZoom(overrides: Record<string, unknown>) {
@@ -1123,6 +1123,16 @@ describe("V4Timeline zoom trails", () => {
 		const cut = trail("out").querySelector<HTMLElement>("[data-zoom-trail-cut]");
 		expect(Number.parseFloat(cut?.style.left ?? "")).toBeCloseTo(0, 6);
 		expect(Number.parseFloat(cut?.style.width ?? "")).toBeCloseTo(100, 6);
+	});
+
+	it("draws one pan between chained zooms instead of a zoom-out and a zoom-in", () => {
+		renderZoom({ zoomRegions: [ZOOM, { id: "z2", startMs: 12_500, endMs: 14_000, depth: 3 }] });
+		const trails = [...document.querySelectorAll<HTMLElement>("[data-zoom-trail]")];
+		expect(trails.map((el) => el.dataset.zoomTrail)).toEqual(["in", "pan", "out"]);
+		const pan = trail("pan");
+		expect(pan).toHaveAccessibleName("Pan: the view moves straight to the next zoom");
+		expect(Number.parseFloat(pan.style.left)).toBeCloseTo(pct(12), 6);
+		expect(Number.parseFloat(pan.style.width)).toBeCloseTo(pct(1), 6);
 	});
 
 	it("stretches the zoom-out across a speed region, uncut", () => {

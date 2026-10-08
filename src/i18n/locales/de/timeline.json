@@ -37,7 +37,8 @@
 		"zoomIn": "Hineinzoomen: Die Ansicht zoomt bis zum Beginn des Zooms hinein",
 		"zoomOut": "Herauszoomen: Die Ansicht zoomt nach dem Ende des Zooms wieder heraus",
 		"zoomInCut": "Ein Trim entfernt {{seconds}} s des Hineinzoomens. Der Export springt am Schnitt.",
-		"zoomOutCut": "Ein Trim entfernt {{seconds}} s des Herauszoomens. Der Export springt am Schnitt."
+		"zoomOutCut": "Ein Trim entfernt {{seconds}} s des Herauszoomens. Der Export springt am Schnitt.",
+		"pan": "Schwenk: Die Ansicht fährt direkt zum nächsten Zoom"
 	},
 	"emptyState": {
 		"noVideo": "Kein Video geladen",

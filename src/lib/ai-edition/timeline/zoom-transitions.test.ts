@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { zoomTransitionMs } from "../../zoomMath/constants";
 import { type SpeedRegion, screenTimeMs, timelineTimeMs } from "./speed";
-import { transitionCutsMs, zoomTransitions } from "./zoom-transitions";
+import { chainedPans, transitionCutsMs, zoomTransitions } from "./zoom-transitions";
 
 const W = zoomTransitionMs(1.8); // ≈ 923 ms
 const zoom = { startMs: 10_000, endMs: 12_000, scale: 1.8 };
@@ -63,5 +63,36 @@ describe("transitionCutsMs", () => {
 		expect(transitionCutsMs(zoom, t, [{ startMs: 13_000, endMs: 14_000 }])).toEqual(none);
 		expect(transitionCutsMs(zoom, t, [{ startMs: 10_500, endMs: 11_000 }])).toEqual(none);
 		expect(transitionCutsMs(zoom, t, [{ startMs: 9000, endMs: 14_000 }])).toEqual(none);
+	});
+});
+
+describe("chainedPans", () => {
+	const next = { startMs: 13_000, endMs: 15_000 };
+
+	it("pans for 1 s from the first zoom's end when the next starts within 1.5 s", () => {
+		expect(chainedPans([next, zoom], [], [])).toEqual([{ from: 1, to: 0, untilMs: 13_000 }]);
+		expect(chainedPans([zoom, { startMs: 13_600, endMs: 15_000 }], [], [])).toEqual([]);
+	});
+
+	it("measures the gap and the pan on screen time", () => {
+		const fast = [{ id: "s", startMs: 12_000, endMs: 20_000, speed: 3 }];
+		// 3 s of timeline at 3× is 1 s on screen: chained, and the pan covers 3 s of timeline.
+		expect(chainedPans([zoom, { startMs: 15_000, endMs: 16_000 }], fast, [])).toEqual([
+			{ from: 0, to: 1, untilMs: 15_000 },
+		]);
+	});
+
+	it("is broken by a trim or a clip junction between the zooms, not by one inside them", () => {
+		expect(chainedPans([zoom, next], [], [{ startMs: 12_200, endMs: 12_400 }])).toEqual([]);
+		expect(chainedPans([zoom, next], [], [{ startMs: 12_000, endMs: 12_000 }])).toEqual([]);
+		expect(chainedPans([zoom, next], [], [{ startMs: 13_000, endMs: 13_000 }])).toEqual([]);
+		expect(chainedPans([zoom, next], [], [{ startMs: 10_500, endMs: 11_000 }])).toHaveLength(1);
+	});
+
+	it("skips a zoom entirely under a trim, which the compositor never chains", () => {
+		const hidden = { startMs: 11_000, endMs: 11_500 };
+		expect(chainedPans([zoom, hidden, next], [], [hidden])).toEqual([
+			{ from: 0, to: 2, untilMs: 13_000 },
+		]);
 	});
 });

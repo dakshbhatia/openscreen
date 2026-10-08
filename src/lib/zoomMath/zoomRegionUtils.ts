@@ -12,13 +12,14 @@ import {
 } from "@/components/video-editor/types";
 import { type SpeedRegion, screenTimeMs } from "@/lib/ai-edition/timeline/speed";
 import { clamp01 } from "@/utils/math";
-import { zoomTransitionMs } from "./constants";
+import {
+	CHAINED_ZOOM_PAN_GAP_MS,
+	CONNECTED_ZOOM_PAN_DURATION_MS,
+	zoomTransitionMs,
+} from "./constants";
 import { interpolateCursorAt } from "./cursorFollowUtils";
 import { clampFocusToScale } from "./focusUtils";
 import { cubicBezier, easeSpring, scaleLerp } from "./mathUtils";
-
-const CHAINED_ZOOM_PAN_GAP_MS = 1500;
-const CONNECTED_ZOOM_PAN_DURATION_MS = 1000;
 
 /** Timeline ms → screen ms. Transition windows are measured on it, see `screenTimeMs`. */
 type ScreenClock = (timeMs: number) => number;

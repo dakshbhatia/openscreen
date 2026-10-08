@@ -68,7 +68,11 @@ import {
 	ventilateTimelineSpanToTrims,
 } from "@/lib/ai-edition/timeline/trim-mapping";
 import { effectiveZoomScale } from "@/lib/ai-edition/timeline/zoom-scale";
-import { transitionCutsMs, zoomTransitions } from "@/lib/ai-edition/timeline/zoom-transitions";
+import {
+	chainedPans,
+	transitionCutsMs,
+	zoomTransitions,
+} from "@/lib/ai-edition/timeline/zoom-transitions";
 import { formatBinding } from "@/lib/shortcuts";
 import { nativeBridgeClient } from "@/native/client";
 import { TransportBar } from "../TransportBar";
@@ -1838,8 +1842,9 @@ export function V4Timeline({
 
 	// Each zoom's camera moves (#1028): the pill shows the hold, the zoom-in runs in the trail
 	// before it and the zoom-out in the trail after it, on the speed-aware clock the compositor
-	// uses. The part a trim cuts is hatched: the export jumps there instead of easing. Display
-	// only, not a control. Hidden while a clip is dragged, when the pills split and slide.
+	// uses. The part a trim cuts is hatched: the export jumps there instead of easing. Chained
+	// zooms get one pan trail between them instead of a zoom-out and a zoom-in. Display only,
+	// not a control. Hidden while a clip is dragged, when the pills split and slide.
 	const renderZoomTrails = () => {
 		if (clipDrag) return null;
 		const ms = (span: { start: number; end: number }) => ({
@@ -1854,32 +1859,46 @@ export function V4Timeline({
 		const trims = trimPills.map((p) => ms(liveSpan(p.id, p)));
 		const totalMs = total * 1000;
 		const sec = (cutMs: number) => (cutMs / 1000).toFixed(2);
-		return zoomRuns.flatMap((r) => {
-			const zoom = ms(liveSpan(r.ids[0], r));
+		const zooms = zoomRuns.map((r) => ms(liveSpan(r.ids[0], r)));
+		const junctions = clips.map((c) => ms({ start: c.timelineEndSec, end: c.timelineEndSec }));
+		const pans = chainedPans(zooms, speeds, [...trims, ...junctions]);
+		return zoomRuns.flatMap((r, i) => {
+			const zoom = zooms[i];
+			const pan = pans.find((p) => p.from === i);
+			const panned = pans.some((p) => p.to === i);
 			const moves = zoomTransitions({ ...zoom, scale: effectiveZoomScale(r.member) }, speeds);
 			const cut = transitionCutsMs(zoom, moves, trims);
 			const outUntilMs = Math.min(moves.outUntilMs, totalMs);
+			const zoomIn = {
+				side: "in",
+				fromMs: moves.inFromMs,
+				toMs: zoom.startMs,
+				cutFromMs: moves.inFromMs,
+				cutToMs: moves.inFromMs + cut.inMs,
+				text: cut.inMs > 0 ? t("trails.zoomInCut", { seconds: sec(cut.inMs) }) : t("trails.zoomIn"),
+			};
 			const trails = [
-				{
-					side: "in",
-					fromMs: moves.inFromMs,
-					toMs: zoom.startMs,
-					cutFromMs: moves.inFromMs,
-					cutToMs: moves.inFromMs + cut.inMs,
-					text:
-						cut.inMs > 0 ? t("trails.zoomInCut", { seconds: sec(cut.inMs) }) : t("trails.zoomIn"),
-				},
-				{
-					side: "out",
-					fromMs: zoom.endMs,
-					toMs: outUntilMs,
-					cutFromMs: moves.outUntilMs - cut.outMs,
-					cutToMs: outUntilMs,
-					text:
-						cut.outMs > 0
-							? t("trails.zoomOutCut", { seconds: sec(cut.outMs) })
-							: t("trails.zoomOut"),
-				},
+				...(panned ? [] : [zoomIn]),
+				pan
+					? {
+							side: "pan",
+							fromMs: zoom.endMs,
+							toMs: Math.min(pan.untilMs, totalMs),
+							cutFromMs: 0,
+							cutToMs: 0,
+							text: t("trails.pan"),
+						}
+					: {
+							side: "out",
+							fromMs: zoom.endMs,
+							toMs: outUntilMs,
+							cutFromMs: moves.outUntilMs - cut.outMs,
+							cutToMs: outUntilMs,
+							text:
+								cut.outMs > 0
+									? t("trails.zoomOutCut", { seconds: sec(cut.outMs) })
+									: t("trails.zoomOut"),
+						},
 			];
 			return trails
 				.filter((trail) => trail.toMs > trail.fromMs)

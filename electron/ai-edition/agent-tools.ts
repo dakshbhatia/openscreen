@@ -61,6 +61,7 @@ import {
 	ZOOM_DEPTH_LEGEND,
 } from "../../src/lib/ai-edition/timeline/zoom-scale";
 import {
+	chainedPans,
 	transitionCutsMs,
 	zoomTransitions,
 } from "../../src/lib/ai-edition/timeline/zoom-transitions";
@@ -743,9 +744,26 @@ function zoomTransitionsForAgent(document: AxcutDocument) {
 			return span ? [{ startMs: span.start * 1000, endMs: span.end * 1000 }] : [];
 		});
 	});
-	return coalesceForAgent(document.zoomRanges).map((zoom) => {
+	// Chained zooms pan from one to the next instead: no zoom-out, no zoom-in, nothing to cut
+	// (a trim between them would have broken the chain).
+	const zooms = coalesceForAgent(document.zoomRanges);
+	const junctions = document.timeline.clips.map((clip) => ({
+		startMs: clip.timelineEndSec * 1000,
+		endMs: clip.timelineEndSec * 1000,
+	}));
+	const pans = chainedPans(zooms, speedRegions, [...trims, ...junctions]);
+	return zooms.map((zoom, i) => {
 		const transitions = zoomTransitions({ ...zoom, scale: effectiveZoomScale(zoom) }, speedRegions);
-		return { zoom, transitions, cut: transitionCutsMs(zoom, transitions, trims) };
+		const panOut = pans.find((p) => p.from === i);
+		const panIn = pans.find((p) => p.to === i);
+		const cut = transitionCutsMs(zoom, transitions, trims);
+		return {
+			zoom,
+			transitions,
+			cut: { inMs: panIn ? 0 : cut.inMs, outMs: panOut ? 0 : cut.outMs },
+			panTo: panOut && { zoomId: zooms[panOut.to].id, untilMs: panOut.untilMs },
+			panFromZoomId: panIn && zooms[panIn.from].id,
+		};
 	});
 }
 
@@ -824,7 +842,10 @@ export function documentSnapshotForModel(
 			"a setZoom that only changes depth on such a zoom clears customScale so the depth takes effect. " +
 			"startSec–endSec is where the zoom HOLDS: it animates in over zoomInFromSec–startSec and out over " +
 			"endSec–zoomOutUntilSec (transitionSec of screen time each; a speed region scales that on the " +
-			"timeline, longer above 1x and shorter below, so read the bounds rather than adding transitionSec). cutByTrim names the move a trim cuts into (in, out or both): the export jumps at that cut.",
+			"timeline, longer above 1x and shorter below, so read the bounds rather than adding transitionSec). cutByTrim names the move a trim cuts into (in, out or both): the export jumps at that cut. " +
+			"Two zooms at most 1.5 s apart on screen, with no trim or clip junction between them, are CHAINED: " +
+			"no zoom-out and back in, the camera pans from the first (panToZoomId, panUntilSec: 1 s of screen " +
+			"time from its endSec, which can run into the next span) to the second (panFromZoomId).",
 		project: { id: document.project.id, title: document.project.title },
 		primaryAssetId: document.project.primaryAssetId ?? document.assets[0]?.id ?? null,
 		autoFocusAll,
@@ -881,27 +902,31 @@ export function documentSnapshotForModel(
 			endSec: s.endSec,
 			reason: s.reason,
 		})),
-		zoomRanges: zoomTransitionsForAgent(document).map(({ zoom: z, transitions, cut }) => ({
-			id: z.id,
-			startSec: roundSec(z.startMs),
-			endSec: roundSec(z.endMs),
-			zoomInFromSec: roundSec(transitions.inFromMs),
-			zoomOutUntilSec: roundSec(transitions.outUntilMs),
-			transitionSec: roundSec(transitions.durationMs),
-			...(cut.inMs > 0 || cut.outMs > 0
-				? { cutByTrim: cut.inMs > 0 ? (cut.outMs > 0 ? "both" : "in") : "out" }
-				: {}),
-			depth: z.depth,
-			renderedScale: effectiveZoomScale(z),
-			// Emitted only when set: an unconditional `customScale: null` on every
-			// zoom of every snapshot is noise the reader learns to skip, which is
-			// how the field would go unnoticed again.
-			...(z.customScale != null ? { customScale: z.customScale, depthIsOverridden: true } : {}),
-			...(z.rotationPreset ? { rotationPreset: z.rotationPreset } : {}),
-			focus: z.focus,
-			focusMode: autoFocusAll ? "auto" : (z.focusMode ?? "manual"),
-			source: z.source ?? "manual",
-		})),
+		zoomRanges: zoomTransitionsForAgent(document).map(
+			({ zoom: z, transitions, cut, panTo, panFromZoomId }) => ({
+				id: z.id,
+				startSec: roundSec(z.startMs),
+				endSec: roundSec(z.endMs),
+				...(panFromZoomId ? { panFromZoomId } : { zoomInFromSec: roundSec(transitions.inFromMs) }),
+				...(panTo
+					? { panToZoomId: panTo.zoomId, panUntilSec: roundSec(panTo.untilMs) }
+					: { zoomOutUntilSec: roundSec(transitions.outUntilMs) }),
+				transitionSec: roundSec(transitions.durationMs),
+				...(cut.inMs > 0 || cut.outMs > 0
+					? { cutByTrim: cut.inMs > 0 ? (cut.outMs > 0 ? "both" : "in") : "out" }
+					: {}),
+				depth: z.depth,
+				renderedScale: effectiveZoomScale(z),
+				// Emitted only when set: an unconditional `customScale: null` on every
+				// zoom of every snapshot is noise the reader learns to skip, which is
+				// how the field would go unnoticed again.
+				...(z.customScale != null ? { customScale: z.customScale, depthIsOverridden: true } : {}),
+				...(z.rotationPreset ? { rotationPreset: z.rotationPreset } : {}),
+				focus: z.focus,
+				focusMode: autoFocusAll ? "auto" : (z.focusMode ?? "manual"),
+				source: z.source ?? "manual",
+			}),
+		),
 		speedRegions: coalesceForAgent(speedRegions).map((s) => ({
 			id: s.id,
 			startSec: roundSec(s.startMs),

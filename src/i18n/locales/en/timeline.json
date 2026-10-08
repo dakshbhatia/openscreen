@@ -37,7 +37,8 @@
 		"zoomIn": "Zoom-in: the view moves in until the zoom starts",
 		"zoomOut": "Zoom-out: the view moves back out after the zoom ends",
 		"zoomInCut": "A trim removes {{seconds}} s of the zoom-in. The export jumps at the cut.",
-		"zoomOutCut": "A trim removes {{seconds}} s of the zoom-out. The export jumps at the cut."
+		"zoomOutCut": "A trim removes {{seconds}} s of the zoom-out. The export jumps at the cut.",
+		"pan": "Pan: the view moves straight to the next zoom"
 	},
 	"emptyState": {
 		"noVideo": "No video loaded",
