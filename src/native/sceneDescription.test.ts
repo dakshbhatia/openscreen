@@ -947,8 +947,38 @@ describe("buildSceneDescription.cameraFullscreenRegions", () => {
 		});
 		const { cameraFullscreenRegions } = buildSceneDescription(doc);
 		expect(cameraFullscreenRegions).toEqual([
-			{ startSec: 103, endSec: 105, clipIndex: 0 },
-			{ startSec: 200, endSec: 202, clipIndex: 1 },
+			{ startSec: 103, endSec: 105, clipIndex: 0, continuesAfter: true },
+			{ startSec: 200, endSec: 202, clipIndex: 1, continuesBefore: true },
+		]);
+	});
+
+	it("marks the cut edges of a region a trim splits, so it stays full across the cut", () => {
+		// Region raw [2, 8] over src [0, 10], trim removes [4, 6]. Each piece ramps only at the
+		// region's own edge: lead-in on the first, lead-out on the second, none at the cut.
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "a", originalPath: "/a.mp4" })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "a", startSec: 4, endSec: 6, reason: "", origin: "user" },
+				],
+			},
+			legacyEditor: {
+				cameraFullscreenRegions: [{ id: "cf1", startMs: 2000, endMs: 8000 }],
+			},
+		});
+		expect(buildSceneDescription(doc).cameraFullscreenRegions).toEqual([
+			{ startSec: 2, endSec: 4, clipIndex: 0, continuesAfter: true },
+			{ startSec: 6, endSec: 8, clipIndex: 1, continuesBefore: true },
 		]);
 	});
 

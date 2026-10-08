@@ -128,6 +128,12 @@ export interface SceneCameraFullscreenRegion {
 	/** See `SceneZoomRegion.underTrim`. Full-Camera needs no extra gate — its envelope is
 	 *  already contained in `[startSec, endSec]` — so this only carries the intent. */
 	underTrim?: boolean;
+	/** A cut (trim or clip boundary) split the region and this piece's start is that cut, not
+	 *  the region's own start: native skips the lead-in so the camera stays full across the
+	 *  cut. Omitted when false. */
+	continuesBefore?: boolean;
+	/** Same at the end: no lead-out at the cut. Omitted when false. */
+	continuesAfter?: boolean;
 }
 
 /** A speed region projected onto each clip's source time. The native compositor matches
@@ -1423,6 +1429,8 @@ export function buildSceneDescription(
 			endSec: region.endMs / 1000,
 			clipIndex: region.clipIndex,
 			...(region.underTrim ? { underTrim: true } : {}),
+			...(region.continuesBefore ? { continuesBefore: true } : {}),
+			...(region.continuesAfter ? { continuesAfter: true } : {}),
 		})),
 		// Speed is the one modifier with nothing to show for itself on a parked playhead: a
 		// still frame has no rate. So the entries under a trim are dropped here rather than

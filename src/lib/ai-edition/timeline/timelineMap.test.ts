@@ -99,8 +99,22 @@ describe("projectRegionsToSource", () => {
 		});
 		const out = projectRegionsToSource([region("r", 3, 7, "keep")], [c1, c2], [c1, c2], () => "r2");
 		expect(out).toEqual([
-			{ id: "r", startMs: 103000, endMs: 105000, clipIndex: 0, payload: "keep" },
-			{ id: "r2", startMs: 200000, endMs: 202000, clipIndex: 1, payload: "keep" },
+			{
+				id: "r",
+				startMs: 103000,
+				endMs: 105000,
+				clipIndex: 0,
+				payload: "keep",
+				continuesAfter: true,
+			},
+			{
+				id: "r2",
+				startMs: 200000,
+				endMs: 202000,
+				clipIndex: 1,
+				payload: "keep",
+				continuesBefore: true,
+			},
 		]);
 	});
 
@@ -117,8 +131,8 @@ describe("projectRegionsToSource", () => {
 		const segments = resolvePlaybackSegments([c], [trim("a", 4, 6)]);
 		const out = projectRegionsToSource([region("r", 3, 8)], segments, [c], () => "r2");
 		expect(out).toEqual([
-			{ id: "r", startMs: 3000, endMs: 4000, clipIndex: 0 },
-			{ id: "r2", startMs: 6000, endMs: 8000, clipIndex: 1 },
+			{ id: "r", startMs: 3000, endMs: 4000, clipIndex: 0, continuesAfter: true },
+			{ id: "r2", startMs: 6000, endMs: 8000, clipIndex: 1, continuesBefore: true },
 		]);
 	});
 
@@ -281,8 +295,8 @@ describe("projectRegionsToSource", () => {
 		};
 		const out = projectRegionsToSource([anchored], segments, [c], () => "r2");
 		expect(out).toEqual([
-			{ ...anchored, id: "r", startMs: 3000, endMs: 4000, clipIndex: 0 },
-			{ ...anchored, id: "r2", startMs: 6000, endMs: 8000, clipIndex: 1 },
+			{ ...anchored, id: "r", startMs: 3000, endMs: 4000, clipIndex: 0, continuesAfter: true },
+			{ ...anchored, id: "r2", startMs: 6000, endMs: 8000, clipIndex: 1, continuesBefore: true },
 		]);
 	});
 

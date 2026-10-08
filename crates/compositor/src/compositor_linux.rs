@@ -4888,6 +4888,8 @@ mod tests {
             clip_index: None,
             start_sec: 2.0,
             end_sec: 8.0,
+            continues_before: false,
+            continues_after: false,
         });
         // 5 s : la montee (~1 s) est finie, le retour (~1,5 s) n'a pas commence.
         comp.set_timeline_time(Some(5.0));

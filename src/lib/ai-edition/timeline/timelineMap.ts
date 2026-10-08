@@ -599,6 +599,14 @@ function cutRegionSourceSpan<T extends { startMs: number; endMs: number } & Regi
 	return { clipId: clip.id, startSec: toSource(lo), endSec: toSource(hi) };
 }
 
+/** A region as `projectRegionsToSource` emits it. */
+type ProjectedRegion<T> = T & {
+	clipIndex?: number;
+	underTrim?: boolean;
+	continuesBefore?: boolean;
+	continuesAfter?: boolean;
+};
+
 /**
  * Resolve regions (zoom / annotation / speed / camera-fullscreen) onto the SOURCE-ms
  * ranges the native compositor matches against, plus the `clipIndex` into the
@@ -613,7 +621,10 @@ function cutRegionSourceSpan<T extends { startMs: number; endMs: number } & Regi
  *    extent, kept because migration deliberately preserves un-anchorable regions.
  *
  * In both paths a region split across two kept segments by a trim yields one entry per
- * segment (fresh id for the extra copies, original id on the first).
+ * segment (fresh id for the extra copies, original id on the first). A piece whose start or
+ * end is a segment edge rather than the region's own edge says so with `continuesBefore` /
+ * `continuesAfter` (omitted when false): Full Camera, whose ramps sit inside its span, must not
+ * ramp at a cut. Zooms need nothing, their envelopes lie outside the span and so outside the clip.
  *
  * A region overlapping no visible segment lies entirely under a trim: it is emitted ONCE,
  * marked `underTrim`, on its own source span and borrowing the `clipIndex` of the kept
@@ -645,16 +656,21 @@ export function projectRegionsToSource<
 	visibleSegments: AxcutClip[],
 	rawClips: AxcutClip[],
 	makeId: () => string,
-): (T & { clipIndex?: number; underTrim?: boolean })[] {
+): ProjectedRegion<T>[] {
 	// RAW extents + owning raw clip per visible segment. Both are only consulted by the
 	// path that needs them (raw fallback / anchor match), but resolving them once keeps
 	// the per-region loop free of repeated lookups.
 	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips));
 	const segmentRawClipIds = visibleSegments.map((seg) => findRawClipForSegment(seg, rawClips)?.id);
-	const out: (T & { clipIndex?: number; underTrim?: boolean })[] = [];
+	const out: ProjectedRegion<T>[] = [];
 	for (const region of regions) {
 		let emitted = 0;
-		const emit = (clipIndex: number, srcStartSec: number, srcEndSec: number, underTrim = false) => {
+		const emit = (
+			clipIndex: number,
+			srcStartSec: number,
+			srcEndSec: number,
+			flags: { underTrim?: boolean; continuesBefore?: boolean; continuesAfter?: boolean } = {},
+		) => {
 			out.push({
 				...region,
 				id: emitted === 0 ? region.id : makeId(),
@@ -663,7 +679,9 @@ export function projectRegionsToSource<
 				clipIndex,
 				// Omitted rather than sent as `false`: every payload without a trim under a
 				// modifier stays byte-for-byte what it was.
-				...(underTrim ? { underTrim: true } : {}),
+				...(flags.underTrim ? { underTrim: true } : {}),
+				...(flags.continuesBefore ? { continuesBefore: true } : {}),
+				...(flags.continuesAfter ? { continuesAfter: true } : {}),
 			});
 			emitted += 1;
 		};
@@ -681,7 +699,7 @@ export function projectRegionsToSource<
 				const s = Math.max(lo, seg.sourceStartSec);
 				const e = Math.min(hi, seg.sourceEndSec ?? seg.sourceStartSec);
 				if (e <= s) return;
-				emit(clipIndex, s, e);
+				emit(clipIndex, s, e, { continuesBefore: s > lo, continuesAfter: e < hi });
 			});
 		} else {
 			// UNANCHORED — migration kept this region rather than dropping it (see
@@ -698,6 +716,7 @@ export function projectRegionsToSource<
 					clipIndex,
 					seg.sourceStartSec + (s - segRawStart),
 					seg.sourceStartSec + (e - segRawStart),
+					{ continuesBefore: s > lo, continuesAfter: e < hi },
 				);
 			});
 		}
@@ -710,7 +729,7 @@ export function projectRegionsToSource<
 				? cutAddressingSegmentIndex(visibleSegments, segmentRawClipIds, cut.clipId, cut.startSec)
 				: -1;
 			if (cut && clipIndex >= 0 && cut.endSec > cut.startSec) {
-				emit(clipIndex, cut.startSec, cut.endSec, true);
+				emit(clipIndex, cut.startSec, cut.endSec, { underTrim: true });
 			}
 		}
 		// No segments AT ALL: no layout to resolve against, so the region passes through on

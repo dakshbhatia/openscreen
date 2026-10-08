@@ -969,6 +969,11 @@ pub fn zoom_state_in(
 /// `endSec`. Fenêtres bornées à la moitié de la durée de la région pour que les régions courtes
 /// s'animent pleinement sans déborder. Fenêtres mesurées à l'écran, comme celles du zoom
 /// (`ScreenClock`). Le rect et la bulle y appliquent chacun leur courbe.
+///
+/// Un morceau coupé par un trim (`continues_before` / `continues_after`) n'a pas de transition
+/// du côté de la coupe, bord compris : la région reste plein cadre à travers le trim, montée à
+/// son vrai début seulement, descente à sa vraie fin seulement. Le côté restant prend alors tout
+/// le span au lieu de sa moitié.
 fn camera_fullscreen_region_phase(
     region: &SceneCameraFullscreenRegion,
     t: f32,
@@ -976,13 +981,20 @@ fn camera_fullscreen_region_phase(
 ) -> f32 {
     let start = region.start_sec as f32;
     let end = region.end_sec as f32;
-    if t <= start || t >= end {
+    let before_start = if region.continues_before { t < start } else { t <= start };
+    let after_end = if region.continues_after { t > end } else { t >= end };
+    if before_start || after_end {
         return 0.0;
     }
     let (start, end, t) = (clock.at(start), clock.at(end), clock.at(t));
-    let half = (end - start) * 0.5;
-    let lead_in = TRANSITION_WINDOW_S.min(half);
-    let lead_out = FULLSCREEN_LEAD_OUT_WINDOW_S.min(half);
+    let span = end - start;
+    let half = span * 0.5;
+    let (lead_in, lead_out) = match (region.continues_before, region.continues_after) {
+        (false, false) => (TRANSITION_WINDOW_S.min(half), FULLSCREEN_LEAD_OUT_WINDOW_S.min(half)),
+        (false, true) => (TRANSITION_WINDOW_S.min(span), 0.0),
+        (true, false) => (0.0, FULLSCREEN_LEAD_OUT_WINDOW_S.min(span)),
+        (true, true) => (0.0, 0.0),
+    };
     let lead_in_end = start + lead_in;
     let lead_out_start = end - lead_out;
     if t < lead_in_end {
@@ -1977,6 +1989,8 @@ mod zoom_focus_tests {
                 clip_index: None,
                 start_sec: 18.0 * k,
                 end_sec: 22.0 * k,
+                continues_before: false,
+                continues_after: false,
             }]
         };
         let (sped, plain) = (zooms(4.0), zooms(1.0));
@@ -2003,11 +2017,52 @@ mod zoom_focus_tests {
         }
     }
 
+    fn full_camera_piece(
+        clip_index: Option<usize>,
+        start_sec: f64,
+        end_sec: f64,
+        continues_before: bool,
+        continues_after: bool,
+    ) -> SceneCameraFullscreenRegion {
+        SceneCameraFullscreenRegion {
+            clip_index,
+            start_sec,
+            end_sec,
+            continues_before,
+            continues_after,
+        }
+    }
+
+    /// Un trim au milieu d'une région Full Camera la coupe en deux morceaux, un par segment gardé
+    /// (`projectRegionsToSource`, TS). Chacun est filtré sur son clip (`for_clip_window`) : la
+    /// webcam ne doit pas revenir dans son coin avant la coupe ni regrandir après. Montée au vrai
+    /// début, descente à la vraie fin, plein cadre de part et d'autre du trim — comme un zoom.
+    #[test]
+    fn a_trim_inside_full_camera_keeps_it_full_across_the_cut() {
+        // Source [10, 20], trim [14, 16] : morceaux [10, 14] (clip 0) et [16, 20] (clip 1).
+        let before = [full_camera_piece(Some(0), 10.0, 14.0, false, true)];
+        let after = [full_camera_piece(Some(1), 16.0, 20.0, true, false)];
+        let clock = ScreenClock::default();
+        let at = |r: &[SceneCameraFullscreenRegion], t: f32| {
+            (camera_fullscreen_progress_at(r, t, &clock), camera_fullscreen_shape_at(r, t, &clock))
+        };
+        let frame = 1.0 / 60.0;
+        assert_eq!(at(&before, 14.0 - frame), (1.0, 0.0), "dernière frame avant la coupe");
+        assert_eq!(at(&before, 14.0), (1.0, 0.0), "bord de coupe, fin");
+        assert_eq!(at(&after, 16.0), (1.0, 0.0), "première frame après la coupe");
+        // Les vraies transitions restent, à leur durée pleine (pas la moitié d'un morceau).
+        assert!(at(&before, 10.0 + TRANSITION_WINDOW_S / 2.0).0 < 1.0, "montée au vrai début");
+        assert_eq!(at(&before, 10.0 + TRANSITION_WINDOW_S).0, 1.0);
+        assert!(at(&after, 20.0 - frame).0 < 1.0, "descente à la vraie fin");
+        assert_eq!(at(&after, 20.0 - FULLSCREEN_LEAD_OUT_WINDOW_S).0, 1.0);
+        assert_eq!(at(&after, 20.0).0, 0.0);
+    }
+
     /// Les coins suivent la phase, pas le rect. Avec `1 - progrès`, ils étaient carrés presque
     /// tout du long de la montée et ne revenaient qu'à la toute fin du retour.
     #[test]
     fn full_camera_corners_dissolve_late_and_come_back_early() {
-        let r = [SceneCameraFullscreenRegion { clip_index: None, start_sec: 10.0, end_sec: 20.0 }];
+        let r = [full_camera_piece(None, 10.0, 20.0, false, false)];
         let clock = ScreenClock::default();
         let at = |t: f32| {
             (camera_fullscreen_progress_at(&r, t, &clock), camera_fullscreen_shape_at(&r, t, &clock))

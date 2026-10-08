@@ -537,6 +537,14 @@ pub struct SceneCameraFullscreenRegion {
     pub clip_index: Option<usize>,
     pub start_sec: f64,
     pub end_sec: f64,
+    /// La région commence avant ce morceau : un trim ou une frontière de clip l'a coupée, et
+    /// `start_sec` est un bord de coupe, pas son vrai début. Pas de montée ici, plein cadre dès
+    /// la première frame, comme un zoom dont l'ease-in tombe hors du clip.
+    #[serde(default)]
+    pub continues_before: bool,
+    /// Pendant de `continues_before` à la fin : pas de descente au bord de la coupe.
+    #[serde(default)]
+    pub continues_after: bool,
 }
 
 /// Rendu du curseur.
