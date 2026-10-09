@@ -824,6 +824,13 @@
 	padding: 24px 28px;
 	gap: 14px;
 }
+.recCompact { align-items: center; justify-content: center; overflow-y: auto; }
+.recCompact .recCols { flex: 0 0 auto; flex-direction: column; width: min(600px, 100%); }
+.recCompact .recPanel { width: 100%; }
+.recCompact .recPreviewCol[hidden] { display: none; }
+.recOptions > summary { padding: 16px; cursor: pointer; color: var(--muted); font-size: 12px; }
+.recOptions > summary:hover { color: var(--fg); }
+.recCompact .recActionsHint { max-width: 60ch; text-align: center; }
 .recCols {
 	flex: 1;
 	min-height: 0;

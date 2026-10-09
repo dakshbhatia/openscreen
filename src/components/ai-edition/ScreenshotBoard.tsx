@@ -1,4 +1,5 @@
 import {
+	Camera,
 	Check,
 	ChevronLeft,
 	ChevronRight,
@@ -19,7 +20,10 @@ import type {
 	ScreenshotReadoutInsight,
 } from "@/lib/screenshot-intel";
 import { nativeBridgeClient } from "@/native/client";
+import { getPlatform } from "@/utils/platformUtils";
 import styles from "./ScreenshotBoard.module.css";
+
+type CaptureAccessStatus = "granted" | "not-determined" | "denied" | "restricted" | "unknown";
 
 interface Props {
 	active: boolean;
@@ -61,6 +65,7 @@ function shareableBatch(batch: ScreenshotBatch) {
 					productBrief: shareText(batch.settings.productBrief),
 					companyDomain: batch.settings.companyDomain,
 					competitor: shareText(batch.settings.competitor),
+					researchGoal: shareText(batch.settings.researchGoal ?? ""),
 					task: shareText(batch.settings.task),
 					model: batch.settings.model,
 				}
@@ -88,6 +93,19 @@ function shareableBatch(batch: ScreenshotBatch) {
 								audience: shareText(batch.analysis.understanding.audience),
 								job: shareText(batch.analysis.understanding.job),
 								confidence: batch.analysis.understanding.confidence,
+							}
+						: undefined,
+					journey: batch.analysis.journey
+						? {
+								goal: shareText(batch.analysis.journey.goal),
+								goalBasis: batch.analysis.journey.goalBasis,
+								outcome: shareText(batch.analysis.journey.outcome),
+								coverage: batch.analysis.journey.coverage,
+								stages: batch.analysis.journey.stages.map((stage) => ({
+									name: shareText(stage.name),
+									purpose: shareText(stage.purpose),
+									evidenceImageIds: stage.evidenceImageIds,
+								})),
 							}
 						: undefined,
 					readout: batch.analysis.readout
@@ -133,6 +151,9 @@ export function ScreenshotBoard({ active }: Props) {
 	const [recent, setRecent] = useState<ScreenshotBatch[]>([]);
 	const [busy, setBusy] = useState<"import" | "analyze" | "organize" | "key" | null>(null);
 	const [error, setError] = useState("");
+	const [captureAccess, setCaptureAccess] = useState<CaptureAccessStatus | null>(null);
+	const [captureAccessBusy, setCaptureAccessBusy] = useState(false);
+	const [captureAccessError, setCaptureAccessError] = useState("");
 	const [dragging, setDragging] = useState(false);
 	const [selectedImage, setSelectedImage] = useState<string | null>(null);
 	const [libraryOpen, setLibraryOpen] = useState(false);
@@ -145,8 +166,12 @@ export function ScreenshotBoard({ active }: Props) {
 	const [summaryExpanded, setSummaryExpanded] = useState(false);
 	const [showAllDecisions, setShowAllDecisions] = useState(false);
 	const [showAllFindings, setShowAllFindings] = useState(false);
+	const [showLegacyAdvice, setShowLegacyAdvice] = useState(false);
+	const [journeyExpanded, setJourneyExpanded] = useState(false);
 	const [decisionEvidenceIds, setDecisionEvidenceIds] = useState<string[] | null>(null);
 	const working = useRef(false);
+	const captureChecking = useRef(false);
+	const captureRequest = useRef(0);
 	const cancelRequested = useRef(false);
 	const analysisStarted = useRef(false);
 	const more = useRef<HTMLDetailsElement>(null);
@@ -210,6 +235,8 @@ export function ScreenshotBoard({ active }: Props) {
 		setSummaryExpanded(false);
 		setShowAllDecisions(false);
 		setShowAllFindings(false);
+		setShowLegacyAdvice(false);
+		setJourneyExpanded(false);
 		setDecisionEvidenceIds(null);
 		setBatch(next);
 		setSelectedImage(null);
@@ -244,7 +271,7 @@ export function ScreenshotBoard({ active }: Props) {
 		action: () => Promise<ScreenshotBatch | null>,
 		analyzeImported = false,
 	) {
-		if (working.current) return;
+		if (working.current || captureChecking.current) return;
 		working.current = true;
 		cancelRequested.current = false;
 		analysisStarted.current = false;
@@ -272,6 +299,98 @@ export function ScreenshotBoard({ active }: Props) {
 			working.current = false;
 			analysisStarted.current = false;
 			setBusy(null);
+		}
+	}
+	const checkCaptureAccess = useCallback(
+		async (showGranted = true): Promise<CaptureAccessStatus | null> => {
+			if (!active || !loaded || working.current || captureChecking.current) return null;
+			const request = ++captureRequest.current;
+			captureChecking.current = true;
+			setCaptureAccessBusy(true);
+			setCaptureAccessError("");
+			try {
+				const result = await nativeBridgeClient.screenshotIntel.captureAccess();
+				if (request !== captureRequest.current) return null;
+				if (result.status !== "granted" || showGranted) setCaptureAccess(result.status);
+				return result.status;
+			} catch {
+				if (request === captureRequest.current) {
+					setCaptureAccess("unknown");
+					setCaptureAccessError(
+						"Couldn’t check screen access. Open System Settings, then check again.",
+					);
+				}
+				return null;
+			} finally {
+				if (request === captureRequest.current) {
+					captureChecking.current = false;
+					setCaptureAccessBusy(false);
+				}
+			}
+		},
+		[active, loaded],
+	);
+	const showCaptureAccess = captureAccess !== null;
+	useEffect(() => {
+		if (!active || !showCaptureAccess) return;
+		const onFocus = () => void checkCaptureAccess();
+		window.addEventListener("focus", onFocus);
+		return () => window.removeEventListener("focus", onFocus);
+	}, [active, showCaptureAccess, checkCaptureAccess]);
+	useEffect(() => {
+		if (!active) {
+			captureRequest.current++;
+			captureChecking.current = false;
+			setCaptureAccessBusy(false);
+		}
+		return () => {
+			captureRequest.current++;
+		};
+	}, [active]);
+	function dismissCaptureAccess() {
+		captureRequest.current++;
+		captureChecking.current = false;
+		setCaptureAccessBusy(false);
+		setCaptureAccess(null);
+		setCaptureAccessError("");
+	}
+	async function takeScreenshot() {
+		if ((await checkCaptureAccess(false)) !== "granted") return;
+		setCaptureAccess(null);
+		await run(
+			"import",
+			async () => {
+				try {
+					return await nativeBridgeClient.screenshotIntel.capture();
+				} catch {
+					setCaptureAccess("unknown");
+					setCaptureAccessError(
+						"Screen capture couldn’t start. Check access or use screenshots instead.",
+					);
+					return null;
+				}
+			},
+			true,
+		);
+	}
+	async function openCaptureSettings() {
+		if (working.current || captureChecking.current) return;
+		const request = ++captureRequest.current;
+		captureChecking.current = true;
+		setCaptureAccessBusy(true);
+		setCaptureAccessError("");
+		try {
+			await nativeBridgeClient.screenshotIntel.openCaptureSettings();
+		} catch {
+			if (request === captureRequest.current)
+				setCaptureAccessError(
+					"Couldn’t open System Settings. Open Privacy & Security → Screen Recording, then check access here.",
+				);
+		} finally {
+			if (request === captureRequest.current) {
+				captureChecking.current = false;
+				setCaptureAccessBusy(false);
+			}
 		}
 	}
 	async function connect() {
@@ -331,7 +450,8 @@ export function ScreenshotBoard({ active }: Props) {
 									shared.context.productBrief,
 									`Company domain: ${shared.context.companyDomain || "Not supplied"}`,
 									`Competitor: ${shared.context.competitor}`,
-									`Research question: ${shared.context.task}`,
+									`Research goal: ${shared.context.researchGoal || "Not supplied"}`,
+									`Attempted task: ${shared.context.task || "Not supplied"}`,
 								]
 							: []),
 						...(shared.companyContext
@@ -347,6 +467,21 @@ export function ScreenshotBoard({ active }: Props) {
 									`Audience: ${shared.analysis.understanding.audience}`,
 									`Job: ${shared.analysis.understanding.job}`,
 									`Confidence: ${shared.analysis.understanding.confidence}`,
+								]
+							: []),
+						...(shared.analysis?.journey
+							? [
+									"## Product pieces",
+									"Unordered screenshot map. Sequence and task completion are unverified.",
+									`Goal: ${shared.analysis.journey.goal}`,
+									`Goal basis: ${shared.analysis.journey.goalBasis}`,
+									`Coverage: ${shared.analysis.journey.coverage}`,
+									`Visible outcome: ${shared.analysis.journey.outcome}`,
+									...shared.analysis.journey.stages.flatMap((stage) => [
+										`### ${stage.name}`,
+										`Purpose: ${stage.purpose}`,
+										`Evidence: ${evidenceLabels(stage.evidenceImageIds)}`,
+									]),
 								]
 							: []),
 						...(shared.analysis?.readout
@@ -400,13 +535,14 @@ export function ScreenshotBoard({ active }: Props) {
 		setTimeout(() => URL.revokeObjectURL(url), 1000);
 	}
 	const analysis = batch?.analysis;
-	const decisionLimit = analysis?.readout ? 1 : 3;
+	const decisionLimit = 1;
 	const contextChanged =
 		batch?.settings &&
 		(batch.settings.productBrief !== settings.productBrief ||
 			batch.settings.companyDomain !== settings.companyDomain ||
 			batch.settings.competitor !== settings.competitor ||
 			batch.settings.task !== settings.task ||
+			(batch.settings.researchGoal ?? "") !== (settings.researchGoal ?? "") ||
 			batch.settings.model !== settings.model ||
 			batch.settings.systemPrompt !== settings.systemPrompt);
 	const groups = new Map<string, ScreenshotBatch["images"]>();
@@ -439,6 +575,9 @@ export function ScreenshotBoard({ active }: Props) {
 				...[...(analysis?.readout?.strengths ?? []), ...(analysis?.readout?.frictions ?? [])]
 					.filter((insight) => insight.evidenceImageIds.includes(image.id))
 					.flatMap((insight) => [insight.title, insight.reason]),
+				...(analysis?.journey?.stages
+					.filter((stage) => stage.evidenceImageIds.includes(image.id))
+					.flatMap((stage) => [stage.name, stage.purpose]) ?? []),
 				...(analysis?.decisions
 					?.filter((decision) => decision.evidenceImageIds.includes(image.id))
 					.flatMap((decision) => [
@@ -483,6 +622,60 @@ export function ScreenshotBoard({ active }: Props) {
 		setDecisionEvidenceIds(ids);
 		setSelectedImage(imageId);
 	}
+	const journeyContent = analysis?.journey ? (
+		<div className={styles.journey}>
+			<p className={styles.journeyGoal}>
+				<strong>
+					{analysis.journey.goalBasis === "inferred"
+						? "Inferred goal"
+						: analysis.journey.goalBasis === "supplied"
+							? "Supplied goal"
+							: "Goal unclear"}
+				</strong>
+				<span>{analysis.journey.goal}</span>
+			</p>
+			<button
+				type="button"
+				className={styles.textButton}
+				aria-expanded={journeyExpanded}
+				aria-controls="screenshot-product-pieces"
+				onClick={() => setJourneyExpanded((expanded) => !expanded)}
+			>
+				{journeyExpanded ? "Hide product pieces" : "Explore product pieces"}
+			</button>
+			{journeyExpanded ? (
+				<div id="screenshot-product-pieces">
+					<p className={styles.muted}>
+						Unordered screenshot map. Sequence and task completion are unverified.
+					</p>
+					<p className={styles.journeyOutcome}>
+						<strong>Visible outcome</strong> {analysis.journey.outcome}
+					</p>
+					{analysis.journey.stages.length ? (
+						<div className={styles.journeyPieces}>
+							{analysis.journey.stages.map((stage, index) => (
+								<article key={`${stage.name}-${index}`}>
+									<h4>{stage.name}</h4>
+									<p>{stage.purpose}</p>
+									<button
+										type="button"
+										className={styles.evidenceLink}
+										aria-label={`Evidence for product piece ${stage.name}`}
+										onClick={() => openEvidence(stage.evidenceImageIds[0], stage.evidenceImageIds)}
+									>
+										{stage.evidenceImageIds.length}{" "}
+										{stage.evidenceImageIds.length === 1 ? "screen" : "screens"}
+									</button>
+								</article>
+							))}
+						</div>
+					) : (
+						<p className={styles.muted}>No supported relationships between these screens.</p>
+					)}
+				</div>
+			) : null}
+		</div>
+	) : null;
 	function insightCard(insight: ScreenshotReadoutInsight, index: number) {
 		return (
 			<article key={`${index}-${insight.title}`} className={styles.insight}>
@@ -551,7 +744,7 @@ export function ScreenshotBoard({ active }: Props) {
 			hidden={!active}
 			onDragOver={(event) => {
 				event.preventDefault();
-				if (!busy) setDragging(true);
+				if (!busy && !captureAccessBusy) setDragging(true);
 			}}
 			onDragLeave={(event) => {
 				if (
@@ -563,7 +756,7 @@ export function ScreenshotBoard({ active }: Props) {
 			onDrop={(event) => {
 				event.preventDefault();
 				setDragging(false);
-				if (busy || !loaded) return;
+				if (busy || captureAccessBusy || !loaded) return;
 				const paths = Array.from(event.dataTransfer.files).map(
 					(file) => window.electronAPI?.getPathForFile(file) ?? "",
 				);
@@ -580,10 +773,20 @@ export function ScreenshotBoard({ active }: Props) {
 					<span>Drop screenshots here</span>
 					<small>Up to 120 PNG, JPEG or WebP images</small>
 				</span>
+				{getPlatform() === "darwin" && !showCaptureAccess ? (
+					<button
+						type="button"
+						className={styles.secondary}
+						disabled={!loaded || !!busy || captureAccessBusy}
+						onClick={() => void takeScreenshot()}
+					>
+						<Camera size={14} /> Take screenshot
+					</button>
+				) : null}
 				<button
 					type="button"
 					className={styles.secondary}
-					disabled={!loaded || !!busy}
+					disabled={!loaded || !!busy || captureAccessBusy}
 					onClick={() => void run("import", () => nativeBridgeClient.screenshotIntel.pick(), true)}
 				>
 					<Upload size={14} /> Choose screenshots
@@ -621,7 +824,7 @@ export function ScreenshotBoard({ active }: Props) {
 									inputMode="url"
 									placeholder="company.com"
 									value={settings.companyDomain}
-									disabled={!loaded || !!busy}
+									disabled={!loaded || !!busy || captureAccessBusy}
 									onChange={(event) => update("companyDomain", event.target.value)}
 									onBlur={() => void saveContext()}
 								/>
@@ -636,10 +839,21 @@ export function ScreenshotBoard({ active }: Props) {
 								rows={2}
 								placeholder="Optional: audience, decision, or constraints the screens don’t show"
 								value={settings.productBrief}
-								disabled={!loaded || !!busy}
+								disabled={!loaded || !!busy || captureAccessBusy}
 								onChange={(event) => update("productBrief", event.target.value)}
 								onBlur={() => void saveContext()}
 							/>
+							<label hidden={!contextExpanded} className={styles.researchGoal}>
+								What are you trying to learn? (optional)
+								<textarea
+									rows={2}
+									maxLength={2000}
+									value={settings.researchGoal ?? ""}
+									disabled={!loaded || !!busy || captureAccessBusy}
+									onChange={(event) => update("researchGoal", event.target.value)}
+									onBlur={() => void saveContext()}
+								/>
+							</label>
 							{!contextExpanded ? (
 								<p className={styles.contextPreview}>
 									{settings.companyDomain ||
@@ -650,7 +864,11 @@ export function ScreenshotBoard({ active }: Props) {
 							{contextError ? (
 								<div role="alert" className={styles.error}>
 									{contextError}
-									<button type="button" disabled={!!busy} onClick={() => void saveContext()}>
+									<button
+										type="button"
+										disabled={!!busy || captureAccessBusy}
+										onClick={() => void saveContext()}
+									>
 										Retry save
 									</button>
 								</div>
@@ -675,14 +893,14 @@ export function ScreenshotBoard({ active }: Props) {
 									autoComplete="off"
 									value={key}
 									placeholder={connected ? "Enter a replacement key" : "Paste your API key"}
-									disabled={!loaded || !!busy}
+									disabled={!loaded || !!busy || captureAccessBusy}
 									onChange={(event) => setKey(event.target.value)}
 								/>
 							</label>
 							<button
 								type="button"
 								className={styles.secondary}
-								disabled={!loaded || !key.trim() || !!busy}
+								disabled={!loaded || !key.trim() || !!busy || captureAccessBusy}
 								onClick={() => void connect()}
 							>
 								{busy === "key" ? "Saving…" : "Save Gemini key"}
@@ -693,7 +911,7 @@ export function ScreenshotBoard({ active }: Props) {
 							<select
 								aria-label="Recent research"
 								value={batch?.id ?? ""}
-								disabled={!!busy || !recent.length}
+								disabled={!!busy || captureAccessBusy || !recent.length}
 								onChange={(event) =>
 									void run("import", () =>
 										nativeBridgeClient.screenshotIntel.get(event.target.value),
@@ -716,16 +934,16 @@ export function ScreenshotBoard({ active }: Props) {
 								Competitor
 								<input
 									value={settings.competitor}
-									disabled={!loaded || !!busy}
+									disabled={!loaded || !!busy || captureAccessBusy}
 									onChange={(event) => update("competitor", event.target.value)}
 									onBlur={() => void saveContext()}
 								/>
 							</label>
 							<label>
-								Research question
+								Attempted task (optional)
 								<input
 									value={settings.task}
-									disabled={!loaded || !!busy}
+									disabled={!loaded || !!busy || captureAccessBusy}
 									onChange={(event) => update("task", event.target.value)}
 									onBlur={() => void saveContext()}
 								/>
@@ -734,7 +952,7 @@ export function ScreenshotBoard({ active }: Props) {
 								Model
 								<input
 									value={settings.model}
-									disabled={!loaded || !!busy}
+									disabled={!loaded || !!busy || captureAccessBusy}
 									onChange={(event) => update("model", event.target.value)}
 									onBlur={() => void saveContext()}
 								/>
@@ -744,7 +962,7 @@ export function ScreenshotBoard({ active }: Props) {
 								<textarea
 									rows={5}
 									value={settings.systemPrompt}
-									disabled={!loaded || !!busy}
+									disabled={!loaded || !!busy || captureAccessBusy}
 									onChange={(event) => update("systemPrompt", event.target.value)}
 									onBlur={() => void saveContext()}
 								/>
@@ -758,7 +976,7 @@ export function ScreenshotBoard({ active }: Props) {
 							<button
 								type="button"
 								className={styles.secondary}
-								disabled={!loaded || !!busy}
+								disabled={!loaded || !!busy || captureAccessBusy}
 								onClick={analyze}
 							>
 								<Sparkles size={14} /> Analyze again
@@ -768,7 +986,7 @@ export function ScreenshotBoard({ active }: Props) {
 							<button
 								type="button"
 								className={styles.secondary}
-								disabled={!!busy}
+								disabled={!!busy || captureAccessBusy}
 								onClick={() =>
 									void nativeBridgeClient.screenshotIntel
 										.reveal(batch.id)
@@ -791,7 +1009,7 @@ export function ScreenshotBoard({ active }: Props) {
 						{batch?.analysis && !batch.organizedPath ? (
 							<button
 								type="button"
-								disabled={!!busy}
+								disabled={!!busy || captureAccessBusy}
 								onClick={() =>
 									void run("organize", () => nativeBridgeClient.screenshotIntel.organize(batch.id))
 								}
@@ -802,12 +1020,57 @@ export function ScreenshotBoard({ active }: Props) {
 					</div>
 				</details>
 			</div>
+			{showCaptureAccess ? (
+				<section className={styles.captureAccess} aria-label="Screen capture access">
+					<h3>
+						{captureAccess === "granted" ? "Screen capture is ready" : "Allow screen capture"}
+					</h3>
+					<p>
+						{captureAccess === "granted"
+							? "Access is ready. Capture a screenshot when you’re ready."
+							: "macOS needs screen recording permission to take a screenshot. Allow access in System Settings → Privacy & Security → Screen Recording, then return here."}
+					</p>
+					{captureAccessError ? <p role="alert">{captureAccessError}</p> : null}
+					<div>
+						{captureAccess !== "granted" ? (
+							<button
+								type="button"
+								className={styles.secondary}
+								disabled={!!busy || captureAccessBusy}
+								onClick={() => void openCaptureSettings()}
+							>
+								Open System Settings
+							</button>
+						) : null}
+						<button
+							type="button"
+							className={styles.secondary}
+							disabled={!!busy || captureAccessBusy}
+							onClick={() => void takeScreenshot()}
+						>
+							{captureAccessBusy
+								? "Checking access…"
+								: captureAccess === "granted"
+									? "Take screenshot"
+									: "Check access & capture"}
+						</button>
+						<button
+							type="button"
+							className={styles.textButton}
+							disabled={!!busy}
+							onClick={dismissCaptureAccess}
+						>
+							Use screenshots instead
+						</button>
+					</div>
+				</section>
+			) : null}
 			{batch && !analysis && !busy ? (
 				<div className={styles.pendingAnalysis}>
 					<button
 						type="button"
 						className={styles.primary}
-						disabled={!loaded || !batch.images.length}
+						disabled={!loaded || !batch.images.length || captureAccessBusy}
 						onClick={analyze}
 					>
 						<Sparkles size={14} /> Analyze screenshots
@@ -915,7 +1178,9 @@ export function ScreenshotBoard({ active }: Props) {
 								hidden={!!analysis.readout && !summaryExpanded}
 								className={summaryExpanded ? undefined : styles.summaryPreview}
 							>
-								{analysis.summary}
+								{!summaryExpanded && analysis.summary.length > 250
+									? `${analysis.summary.slice(0, 250).trimEnd()}…`
+									: analysis.summary}
 							</p>
 							{
 								<button
@@ -960,6 +1225,7 @@ export function ScreenshotBoard({ active }: Props) {
 							</dl>
 						</details>
 					) : null}
+					{!analysis.readout ? journeyContent : null}
 					{analysis.readout ? (
 						<>
 							{analysis.understanding ? (
@@ -968,10 +1234,12 @@ export function ScreenshotBoard({ active }: Props) {
 										<strong>Product</strong>
 										{analysis.understanding.product}
 									</p>
-									<p>
-										<strong>Job to be done</strong>
-										{analysis.understanding.job}
-									</p>
+									{!analysis.journey ? (
+										<p>
+											<strong>Job to be done</strong>
+											{analysis.understanding.job}
+										</p>
+									) : null}
 									<details className={styles.understanding}>
 										<summary>Audience & confidence</summary>
 										<p>
@@ -981,6 +1249,7 @@ export function ScreenshotBoard({ active }: Props) {
 									</details>
 								</div>
 							) : null}
+							{journeyContent}
 							<div className={styles.readout}>
 								<section aria-label="Works well">
 									<h3>Works well</h3>
@@ -1016,7 +1285,7 @@ export function ScreenshotBoard({ active }: Props) {
 						{analysis.decisions
 							? analysis.decisions.slice(0, showAllDecisions ? 5 : decisionLimit).map(decisionCard)
 							: !analysis.readout
-								? analysis.screens.slice(0, 3).map((screen) => (
+								? analysis.screens.slice(0, showLegacyAdvice ? 3 : 1).map((screen) => (
 										<article key={screen.imageId}>
 											<button
 												type="button"
@@ -1038,6 +1307,18 @@ export function ScreenshotBoard({ active }: Props) {
 									))
 								: null}
 					</div>
+					{!analysis.readout && !analysis.decisions && analysis.screens.length > 1 ? (
+						<button
+							type="button"
+							className={styles.textButton}
+							aria-expanded={showLegacyAdvice}
+							onClick={() => setShowLegacyAdvice((shown) => !shown)}
+						>
+							{showLegacyAdvice
+								? "Fewer takeaways"
+								: `More takeaways (${Math.min(3, analysis.screens.length) - 1})`}
+						</button>
+					) : null}
 					{(analysis.readout || analysis.decisions) && !analysis.decisions?.length ? (
 						<p className={styles.muted}>
 							No supported product decision yet. Inspect the screens and unknowns before choosing an

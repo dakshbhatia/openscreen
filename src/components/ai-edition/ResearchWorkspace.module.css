@@ -21,6 +21,9 @@
 	background: color-mix(in srgb, var(--surface) 65%, transparent);
 }
 .inputTabs button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
 	border: 0;
 	border-radius: 7px;
 	background: transparent;
@@ -195,9 +198,17 @@
 }
 
 .wordmark {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
 	font-size: 15px;
 	font-weight: 600;
 	letter-spacing: -0.025em;
+}
+.brandMark {
+	display: block;
+	flex-shrink: 0;
+	user-select: none;
 }
 .moreMenu {
 	position: relative;

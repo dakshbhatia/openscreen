@@ -601,7 +601,12 @@ export type NativeBridgeRequest =
 	  }
 	| {
 			domain: "aiEdition";
-			action: "screenshots.pick" | "screenshots.list";
+			action:
+				| "screenshots.pick"
+				| "screenshots.list"
+				| "screenshots.capture"
+				| "screenshots.captureAccess"
+				| "screenshots.openCaptureSettings";
 			payload?: EmptyPayload;
 			requestId?: string;
 	  }

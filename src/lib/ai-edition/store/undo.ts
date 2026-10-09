@@ -94,12 +94,15 @@ export interface UndoRedoHandlers {
 	runRedo: () => void;
 }
 
-export function useUndoRedoShortcuts(onAfter: () => void): UndoRedoHandlers {
+export function useUndoRedoShortcuts(onAfter: () => void, enabled = true): UndoRedoHandlers {
 	const onAfterRef = useRef(onAfter);
 	onAfterRef.current = onAfter;
+	const enabledRef = useRef(enabled);
+	enabledRef.current = enabled;
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (isTextEditingTarget(e.target)) return;
+			if (!enabledRef.current) return;
 			// `NewEditorShell` hands Ctrl+Z / Ctrl+Y to this listener instead of handling them,
 			// so its modal guard never runs for them: without this one, undo kept rewriting the
 			// document under every open modal, including the ones the shell does suppress.
@@ -136,6 +139,7 @@ export function useUndoRedoShortcuts(onAfter: () => void): UndoRedoHandlers {
 			window.document.execCommand?.("undo");
 			return;
 		}
+		if (!enabledRef.current) return;
 		// AFTER the text-field check, so a rename dialog's input still gets the browser's
 		// own text undo. Before it, this route rewrote the DOCUMENT under an open modal:
 		// a modal's controls are buttons, so `isTextEditingTarget` waves them through, and
@@ -151,6 +155,7 @@ export function useUndoRedoShortcuts(onAfter: () => void): UndoRedoHandlers {
 			window.document.execCommand?.("redo");
 			return;
 		}
+		if (!enabledRef.current) return;
 		if (isModalOpen()) return;
 		if (redo()) onAfterRef.current();
 	}, []);

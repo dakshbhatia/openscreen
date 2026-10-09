@@ -13,8 +13,15 @@ import {
 	type IntelSettings,
 	intelReportSchema,
 	intelSettingsSchema,
+	PRODUCT_RECORDING_BRIEF_RULES,
 	parseProductAnalysis,
 	productAnalysisSchema,
+	productDecisionSchema,
+	productJourneySchema,
+	productPieceSchema,
+	productReadoutInsightSchema,
+	productReadoutSchema,
+	productUnderstandingSchema,
 } from "../../src/lib/product-intel";
 import { PRODUCT_REASONING_RULES } from "../../src/lib/product-reasoning";
 import { geminiHttpError } from "./gemini-errors";
@@ -22,10 +29,36 @@ import { geminiHttpError } from "./gemini-errors";
 const API = "https://generativelanguage.googleapis.com";
 // Large bounded arrays make Google's response grammar reject otherwise valid
 // requests. Keep those limits in local validation, outside the wire schema.
-const geminiAnalysisSchema = productAnalysisSchema.extend({
+const currentAnalysisSchema = productAnalysisSchema.extend({
+	understanding: productUnderstandingSchema,
+	readout: productReadoutSchema,
+	decisions: z.array(productDecisionSchema).max(3),
+	pieces: z.array(productPieceSchema).max(12),
+	journey: productJourneySchema,
+});
+const geminiInsightSchema = productReadoutInsightSchema.extend({
+	evidenceTimesSec: z.array(z.number().finite().nonnegative()),
+});
+const geminiAnalysisSchema = currentAnalysisSchema.extend({
 	steps: z.array(productAnalysisSchema.shape.steps.element),
 	findings: z.array(productAnalysisSchema.shape.findings.element),
 	unknowns: z.array(productAnalysisSchema.shape.unknowns.element),
+	readout: z.strictObject({
+		strengths: z.array(geminiInsightSchema),
+		frictions: z.array(geminiInsightSchema),
+	}),
+	decisions: z.array(
+		productDecisionSchema.extend({ evidenceTimesSec: z.array(z.number().finite().nonnegative()) }),
+	),
+	pieces: z.array(productPieceSchema),
+	journey: z.strictObject({
+		...productJourneySchema.shape,
+		stages: z.array(
+			productJourneySchema.shape.stages.element.extend({
+				evidenceTimesSec: z.array(z.number().finite().nonnegative()),
+			}),
+		),
+	}),
 });
 const sourceMime: Record<string, string> = {
 	".mp4": "video/mp4",
@@ -181,6 +214,7 @@ export class ProductIntelService {
 							stat.mtimeMs,
 							settings,
 							PRODUCT_REASONING_RULES,
+							PRODUCT_RECORDING_BRIEF_RULES,
 						]),
 					)
 					.digest("hex");
@@ -243,7 +277,11 @@ export class ProductIntelService {
 							headers: { "content-type": "application/json" },
 							body: JSON.stringify({
 								systemInstruction: {
-									parts: [{ text: `${settings.systemPrompt}\n\n${PRODUCT_REASONING_RULES}` }],
+									parts: [
+										{
+											text: `${settings.systemPrompt}\n\n${PRODUCT_REASONING_RULES}\n\n${PRODUCT_RECORDING_BRIEF_RULES}`,
+										},
+									],
 								},
 								contents: [
 									{
@@ -273,7 +311,10 @@ export class ProductIntelService {
 					.join("");
 				if (!text)
 					throw new Error("Gemini returned no analysis. Try a shorter recording or another model.");
-				const analysis = parseProductAnalysis(JSON.parse(text), source.durationSec);
+				const analysis = parseProductAnalysis(
+					currentAnalysisSchema.parse(JSON.parse(text)),
+					source.durationSec,
+				);
 				controller.signal.throwIfAborted();
 				report = {
 					projectId,

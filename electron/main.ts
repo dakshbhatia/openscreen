@@ -14,13 +14,7 @@ import {
 	Tray,
 } from "electron";
 import { ShortcutBinding } from "../src/lib/shortcuts";
-import {
-	type AboutFacts,
-	COPYRIGHT,
-	formatAboutDetail,
-	PRODUCT_NAME,
-	usesNativeAboutPanel,
-} from "./about";
+import { type AboutFacts, COPYRIGHT, formatAboutDetail, usesNativeAboutPanel } from "./about";
 import { LlmConfigStore } from "./ai-edition/llm-config-store";
 import { PROVIDER_DEFINITIONS } from "./ai-edition/provider-registry";
 import { AppSettingsStore } from "./app-settings";
@@ -63,11 +57,7 @@ import {
 import { isOnlyLingeringOverlay } from "./lingeringOverlay";
 import { installMainProcessErrorGuards } from "./main-process-errors";
 import { showMessageBoxOver } from "./messageBox";
-import {
-	registerPermissionsIpc,
-	showPermissionsWindow,
-	showPermissionsWindowIfNeeded,
-} from "./permissions";
+import { registerPermissionsIpc, showPermissionsWindow } from "./permissions";
 import { setDisplaySleepBlocked } from "./recording/displaySleepBlocker";
 import { offersStarPrompt, REPO_URL, storeReviewUrl } from "./star-prompt";
 import { registerSttIpc, shutdownStt } from "./stt";
@@ -147,6 +137,8 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
 	? path.join(process.env.APP_ROOT, "public")
 	: RENDERER_DIST;
 
+const PRODUCT_NAME = "ProductIntel";
+
 // Window references
 let mainWindow: BrowserWindow | null = null;
 let sourceSelectorWindow: BrowserWindow | null = null;
@@ -166,7 +158,7 @@ function createWindow() {
 		return;
 	}
 
-	mainWindow = createHudOverlayWindow();
+	createEditorWindowWrapper();
 }
 
 function showMainWindow() {
@@ -203,7 +195,11 @@ function isEditorWindow(window: BrowserWindow) {
 function sendEditorMenuAction(
 	channel: "menu-load-project" | "menu-save-project" | "menu-save-project-as" | "menu-new-project",
 ) {
-	let targetWindow = BrowserWindow.getFocusedWindow() ?? mainWindow;
+	const focusedWindow = BrowserWindow.getFocusedWindow();
+	let targetWindow =
+		focusedWindow && !focusedWindow.isDestroyed() && isEditorWindow(focusedWindow)
+			? focusedWindow
+			: mainWindow;
 
 	if (!targetWindow || targetWindow.isDestroyed() || !isEditorWindow(targetWindow)) {
 		createEditorWindowWrapper();
@@ -239,7 +235,7 @@ function setupApplicationMenu() {
 			submenu: [
 				{
 					role: "about",
-					label: mainT("common", "actions.about") || "About OpenScreen",
+					label: `About ${PRODUCT_NAME}`,
 				},
 				{
 					label: mainT("common", "actions.permissions") || "Permissions…",
@@ -276,7 +272,7 @@ function setupApplicationMenu() {
 				{ type: "separator" },
 				{
 					role: "hide",
-					label: mainT("common", "actions.hide") || "Hide OpenScreen",
+					label: `Hide ${PRODUCT_NAME}`,
 				},
 				{
 					role: "hideOthers",
@@ -412,7 +408,7 @@ function setupApplicationMenu() {
 						]
 					: []),
 				{
-					label: mainT("common", "actions.about") || "About OpenScreen",
+					label: `About ${PRODUCT_NAME}`,
 					click: runAboutDialog,
 				},
 				{ type: "separator" as const },
@@ -546,7 +542,7 @@ async function presentAboutDialog() {
 	const heading = `${PRODUCT_NAME} ${facts.version}`;
 	const choice = await showMessageBox({
 		type: "info",
-		title: mainT("common", "actions.about") || "About OpenScreen",
+		title: `About ${PRODUCT_NAME}`,
 		message: heading,
 		detail,
 		buttons: [
@@ -942,10 +938,10 @@ function updateTrayMenu(recording: boolean = false) {
 				isMac
 					? {
 							role: "about" as const,
-							label: mainT("common", "actions.about") || "About OpenScreen",
+							label: `About ${PRODUCT_NAME}`,
 						}
 					: {
-							label: mainT("common", "actions.about") || "About OpenScreen",
+							label: `About ${PRODUCT_NAME}`,
 							click: runAboutDialog,
 						},
 				// Right next to About, and reachable without opening any window: this is the
@@ -1007,7 +1003,7 @@ function forceCloseEditorWindow(windowToClose: BrowserWindow | null) {
 }
 
 function createEditorWindowWrapper() {
-	if (mainWindow) {
+	if (mainWindow && !mainWindow.isDestroyed()) {
 		isForceClosing = true;
 		mainWindow.close();
 		isForceClosing = false;
@@ -1380,13 +1376,13 @@ appReady?.then(async () => {
 	await ensureRecordingsDir();
 
 	function switchToHudWrapper() {
-		if (mainWindow) {
+		if (mainWindow && !mainWindow.isDestroyed()) {
 			isForceClosing = true;
 			mainWindow.close();
 			isForceClosing = false;
 			mainWindow = null;
 		}
-		showMainWindow();
+		mainWindow = createHudOverlayWindow();
 	}
 
 	const { mcpController } = registerIpcHandlers(
@@ -1438,7 +1434,5 @@ appReady?.then(async () => {
 	// Off unless the user turned it on in Settings → AI. Started here rather than
 	// in registerIpcHandlers so neither the headless CLI nor a bench run binds it.
 	void mcpController.startIfEnabled();
-	void showPermissionsWindowIfNeeded().catch((error) =>
-		console.warn("[permissions] could not read the permissions at launch:", error),
-	);
+	// Capture permissions are offered only when a capture action needs them.
 });

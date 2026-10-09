@@ -20,6 +20,7 @@ import { clipAwaitsProbedDuration } from "@/lib/ai-edition/document/timeline";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import {
 	DOCUMENT_SAVES_WAIT_TIMEOUT_MS,
+	getProjectTransitionVersion,
 	saveWithDeadline,
 	useProjectStore,
 	waitForDocumentSaves,
@@ -318,9 +319,9 @@ export async function maybeSaveFreshRecordingAutoZooms(
  * Imports the recording the HUD handed over into a new project, and consumes the
  * hand-off so it is imported exactly once.
  *
- * Returns false when there is nothing pending — the caller then falls back to
- * reopening the most recent project. Throws if the import itself fails, leaving
- * the session in place so a later mount can retry it.
+ * Returns false when there is nothing pending or a project switch supersedes
+ * the import. Throws if the import itself fails. Unclaimed sessions stay pending
+ * so a later mount can retry them.
  */
 export async function importPendingRecording(
 	/**
@@ -333,18 +334,28 @@ export async function importPendingRecording(
 	const api = window.electronAPI;
 	if (!api) return false;
 
+	const transition = getProjectTransitionVersion();
 	const result = await api.getCurrentRecordingSession();
+	if (transition !== getProjectTransitionVersion()) return false;
 	const screenPath = result.success ? result.session?.screenVideoPath : undefined;
 	if (!screenPath) return false;
 	const cursorCaptureMode = result.success ? result.session?.cursorCaptureMode : undefined;
 	const warning = result.success ? result.warning : undefined;
 
 	const label = screenPath.split(/[\\/]/).pop() || "Recording";
-	await useProjectStore.getState().createProject(`Recording ${new Date().toLocaleString()}`);
-	await useProjectStore.getState().addAsset(screenPath, label);
-	// Mark before the video element can fire `loadedmetadata`. The asset path is
-	// already on the document; waiting until the 60s seed finished let the first
-	// metadata pass consume nothing and the second never arrive.
+	const created = await useProjectStore
+		.getState()
+		.createProject(`Recording ${new Date().toLocaleString()}`);
+	const ownsProject = () => useProjectStore.getState().projectId === created.project.id;
+	if (!ownsProject()) return false;
+	const asset = await useProjectStore.getState().addAsset(screenPath, label);
+	if (!asset || !ownsProject()) return false;
+	// Consumed only after the intended project owns the recording. A superseded
+	// import leaves the hand-off available for a later mount.
+	await api.setCurrentRecordingSession(null);
+	if (!ownsProject()) return false;
+	// Mark before the timeline seed yields. If metadata already arrived, the pass
+	// at the end of this import applies the pending suggestion to the real duration.
 	//
 	// Except for a system-cursor take, which writes no `.cursor.json` at all: the
 	// toggle stays on in prefs (it is only disabled in the UI while that mode is
@@ -354,18 +365,17 @@ export async function importPendingRecording(
 	if (cursorCaptureMode !== "system") {
 		markFreshRecordingAutoZoomPending(screenPath);
 	}
-	// Consumed: the recording now lives in a project. Cleared here rather than
-	// after the timeline seed below so a failure down there can't hand the same
-	// recording to the next editor window.
-	await api.setCurrentRecordingSession(null);
-
 	// ponytail: MediaRecorder WebMs ship with duration = NaN until
 	// fix-webm-duration patches the EBML header; until that flows through the
 	// asset, drop a default 60s clip into the timeline so the editor isn't stuck
 	// on "No clips yet" the moment the user lands in the project. Real duration
 	// overwrites this when handleLoadedMetadata fires with a finite value.
 	const doc = useProjectStore.getState().document;
-	if (doc && doc.timeline.clips.length === 0 && doc.assets.length > 0) {
+	if (
+		doc?.project.id === created.project.id &&
+		doc.timeline.clips.length === 0 &&
+		doc.assets.length > 0
+	) {
 		// `history: false`. Nothing here is an edit: the user finished a recording and the
 		// editor built them a project around it, unattended, on mount. Recording it left a
 		// brand-new project sitting at `past.length === 1` before the user had touched
@@ -377,10 +387,12 @@ export async function importPendingRecording(
 				history: false,
 			});
 	}
+	if (!ownsProject()) return false;
 	const latest = useProjectStore.getState().document;
-	if (latest) {
+	if (latest?.project.id === created.project.id) {
 		await maybeSaveFreshRecordingAutoZooms(latest);
 	}
+	if (!ownsProject()) return false;
 	if (warning) {
 		onWarning?.(warning);
 	}

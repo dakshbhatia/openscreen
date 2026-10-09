@@ -667,19 +667,19 @@ export function createCountdownOverlayWindow(): BrowserWindow {
 }
 
 /**
- * The macOS permissions window: first run, the app menu, and wherever a missing permission
+ * The macOS permissions window: the app menu and wherever a missing permission
  * would otherwise stop a recording. An ordinary opaque window on purpose -- it has to sit
  * beside System Settings and macOS' own prompts, not float above them like the HUD.
  */
 export function createPermissionsWindow(): BrowserWindow {
 	const win = new BrowserWindow({
 		width: 520,
-		height: 640,
+		height: 460,
 		resizable: false,
 		minimizable: false,
 		maximizable: false,
 		fullscreenable: false,
-		title: "OpenScreen",
+		title: "ProductIntel — Screen access",
 		backgroundColor: "#0b0c0f",
 		show: false,
 		webPreferences: {
@@ -716,7 +716,7 @@ export function createNotesWindow(): BrowserWindow {
 		minHeight: 400,
 		maxWidth: 640,
 		maxHeight: 720,
-		title: "OpenScreen - Notes",
+		title: "ProductIntel — Notes",
 		backgroundColor: "#09090b",
 		resizable: true,
 		alwaysOnTop: true,

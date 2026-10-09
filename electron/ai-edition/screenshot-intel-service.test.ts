@@ -68,6 +68,13 @@ function google(transform: (analysis: ScreenshotAnalysis) => unknown = (analysis
 				confidence: "medium",
 			})),
 			unknowns: ["The screenshots do not establish flow order or conversion impact."],
+			journey: {
+				goal: "Create a workspace",
+				goalBasis: "inferred",
+				outcome: "Setup is visible; completion and order are unknown.",
+				coverage: "collection",
+				stages: [{ name: "Setup", purpose: "Name shared work.", evidenceImageIds: ids }],
+			},
 			understanding: {
 				product: "A team workspace",
 				audience: "Possibly teams; not established",
@@ -157,11 +164,16 @@ function bulkGoogle(
 				.split("\nRead ")[0],
 		) as { chunks: { analysis: ScreenshotAnalysis }[] };
 		const first = evidence.chunks[0].analysis;
+		if (!first.journey) throw new Error("Missing chunk journey");
 		const screens = evidence.chunks.flatMap((chunk) => chunk.analysis.screens);
 		const refs = [screens[0].imageId, screens[screens.length - 1].imageId];
 		const { screens: _screens, ...summary } = first;
 		const synthesis = {
 			...summary,
+			journey: {
+				...first.journey,
+				stages: first.journey.stages.map((stage) => ({ ...stage, evidenceImageIds: refs })),
+			},
 			screenGroups: [
 				{ name: "Workspace setup", imageIds: screens.map((screen) => screen.imageId) },
 			],
@@ -412,6 +424,7 @@ describe("ScreenshotIntelService", () => {
 					"decisions",
 					"unknowns",
 					"screenGroups",
+					"journey",
 				]),
 			}),
 		);
@@ -424,6 +437,8 @@ describe("ScreenshotIntelService", () => {
 		const crossChunkRefs = [sentIds[0], sentIds[119]];
 		expect(result.analysis?.decisions?.[0].evidenceImageIds).toEqual(crossChunkRefs);
 		expect(result.analysis?.readout?.strengths[0].evidenceImageIds).toEqual(crossChunkRefs);
+		expect(result.analysis?.journey?.stages[0].evidenceImageIds).toEqual(crossChunkRefs);
+		expect(result.analysis?.journey?.coverage).toBe("collection");
 		expect(new Set(result.analysis?.screens.map((screen) => screen.group))).toEqual(
 			new Set(["Workspace setup"]),
 		);
@@ -432,6 +447,69 @@ describe("ScreenshotIntelService", () => {
 		expect((await fs.stat(metadata)).size).toBeGreaterThan(512 * 1024);
 		expect(await intel.get(batch.id)).toEqual(result);
 		expect(await intel.list()).toHaveLength(1);
+	});
+	it("preserves the exact research question in chunk and synthesis context", async () => {
+		const base = bulkGoogle();
+		const researchGoal = "  Where is first value?!\nKeep my wording.  ";
+		const intel = new ScreenshotIntelService(
+			root,
+			async () => ({ ...DEFAULT_INTEL_SETTINGS, researchGoal }),
+			() => "key",
+			base.fetcher,
+		);
+		const batch = await intel.import(await uniqueImages(25));
+		const result = await intel.analyze(batch.id);
+		expect(base.requests).toHaveLength(3);
+		for (const request of base.requests) {
+			const context = request.contents[0].parts[0];
+			if (!("text" in context)) throw new Error("Missing request context");
+			expect(context.text).toContain(JSON.stringify(researchGoal));
+		}
+		expect(result.settings?.researchGoal).toBe(researchGoal);
+	});
+	it.each([
+		"missing",
+		"phantom",
+		"duplicate",
+		"too many stages",
+	])("rejects an invalid synthesized journey (%s) and preserves the complete prior report", async (kind) => {
+		let invalid = false;
+		const base = bulkGoogle({
+			finalTransform: (analysis) => {
+				if (!invalid) return analysis;
+				if (kind === "missing") {
+					const { journey: _journey, ...missing } = analysis;
+					return missing;
+				}
+				const journey = analysis.journey;
+				if (!journey) throw new Error("Missing journey fixture");
+				const stage = journey.stages[0];
+				return {
+					...analysis,
+					journey: {
+						...journey,
+						stages:
+							kind === "too many stages"
+								? Array.from({ length: 9 }, () => stage)
+								: [
+										{
+											...stage,
+											evidenceImageIds:
+												kind === "phantom"
+													? ["image_00000000-0000-0000-0000-000000000099"]
+													: [stage.evidenceImageIds[0], stage.evidenceImageIds[0]],
+										},
+									],
+					},
+				};
+			},
+		});
+		const intel = service("key", base.fetcher);
+		const batch = await intel.import(await uniqueImages(25));
+		const previous = await intel.analyze(batch.id);
+		invalid = true;
+		await expect(intel.analyze(batch.id)).rejects.toThrow();
+		expect(await intel.get(batch.id)).toEqual(previous);
 	});
 	it("splits even a small image count when resized payloads exceed the request byte budget", async () => {
 		const paths = [];
@@ -724,6 +802,7 @@ describe("ScreenshotIntelService", () => {
 		"decisions",
 		"understanding",
 		"readout",
+		"journey",
 	] as const)("requires %s on new replies while allowing old stored reports", async (field) => {
 		const { fetcher } = google((analysis) => {
 			const legacy = { ...analysis };

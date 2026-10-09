@@ -52,6 +52,7 @@ export function PermissionsWindow() {
 	const t = useScopedT("launch");
 	const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
 	const [busy, setBusy] = useState<Kind | null>(null);
+	const [error, setError] = useState<string | null>(null);
 	const mounted = useRef(true);
 
 	const refresh = useCallback(async () => {
@@ -60,8 +61,8 @@ export function PermissionsWindow() {
 			if (mounted.current) {
 				setSnapshot(next);
 			}
-		} catch (error) {
-			console.warn("[permissions] read failed:", error);
+		} catch {
+			if (mounted.current) setError("Could not check screen access. Try again in System Settings.");
 		}
 	}, []);
 
@@ -85,6 +86,7 @@ export function PermissionsWindow() {
 	const act = useCallback(
 		async (kind: Kind, status: Status) => {
 			setBusy(kind);
+			setError(null);
 			try {
 				if (status === "denied" || status === "requested") {
 					await window.electronAPI.permissions.openSettings(kind);
@@ -92,6 +94,8 @@ export function PermissionsWindow() {
 					await window.electronAPI.permissions.request(kind);
 				}
 				await refresh();
+			} catch {
+				if (mounted.current) setError("Could not open permission settings. Try again.");
 			} finally {
 				if (mounted.current) {
 					setBusy(null);
@@ -101,83 +105,107 @@ export function PermissionsWindow() {
 		[refresh],
 	);
 
-	if (!snapshot) {
-		return <div className="h-screen bg-[#0b0c0f]" />;
-	}
-
-	const screenReady =
-		!snapshot.screenRequired || (snapshot.screen === "granted" && !snapshot.screenRequiresRelaunch);
-	const needsRelaunch = snapshot.screen === "granted" && snapshot.screenRequiresRelaunch;
+	const needsRelaunch = snapshot?.screen === "granted" && snapshot.screenRequiresRelaunch;
+	const rows = snapshot ? rowsFor(snapshot) : [];
+	const renderRow = ({ kind, level, Icon }: Row) => {
+		if (!snapshot) return null;
+		const status = snapshot[kind];
+		return (
+			<li
+				key={kind}
+				data-testid={`permission-${kind}`}
+				data-status={status}
+				className="rounded-xl border border-[#20232a] bg-[#121419] px-4 py-3"
+			>
+				<div className="flex items-center gap-3">
+					<Icon className="h-5 w-5 shrink-0 text-[#10b981]" aria-hidden />
+					<div className="min-w-0 flex-1">
+						<div className="flex items-center gap-2">
+							<span className="text-[13px] font-medium">{t(`permissions.rows.${kind}.name`)}</span>
+							{kind !== "screen" && (
+								<span className="text-[11px] text-[#8b93a1]">
+									{t(`permissions.level.${level}`)}
+								</span>
+							)}
+						</div>
+						{kind !== "screen" && (
+							<p className="mt-0.5 text-[12.5px] leading-[18px] text-[#8b93a1]">
+								{t(`permissions.rows.${kind}.description`)}
+							</p>
+						)}
+					</div>
+					<PermissionAction
+						kind={kind}
+						status={status}
+						busy={busy !== null}
+						onAct={() => void act(kind, status)}
+						t={t}
+					/>
+				</div>
+				{kind === "screen" && <ScreenHelp snapshot={snapshot} needsRelaunch={needsRelaunch} />}
+				{kind === "systemAudio" && <SystemAudioHelp status={status} />}
+			</li>
+		);
+	};
+	const runWindowAction = async (action: "close" | "relaunch") => {
+		try {
+			await window.electronAPI.permissions[action]();
+		} catch {
+			if (mounted.current) setError("Could not complete this action. Try again.");
+		}
+	};
 
 	return (
-		<div className="flex h-screen flex-col bg-[#0b0c0f] px-7 pt-7 pb-6 text-white select-none">
-			<h1 className="text-[17px] font-semibold">{t("permissions.title")}</h1>
-			<p className="mt-1.5 text-[13px] leading-5 text-[#8b93a1]">{t("permissions.subtitle")}</p>
-
-			<ul className="mt-5 flex flex-col gap-2.5">
-				{rowsFor(snapshot).map(({ kind, level, Icon }) => {
-					const status = snapshot[kind];
-					return (
-						<li
-							key={kind}
-							data-testid={`permission-${kind}`}
-							data-status={status}
-							className="rounded-xl border border-[#20232a] bg-[#121419] px-4 py-3"
-						>
-							<div className="flex items-center gap-3">
-								<Icon className="h-5 w-5 shrink-0 text-[#10b981]" aria-hidden />
-								<div className="min-w-0 flex-1">
-									<div className="flex items-center gap-2">
-										<span className="text-[13px] font-medium">
-											{t(`permissions.rows.${kind}.name`)}
-										</span>
-										<span className="rounded-full bg-[#1c1f26] px-2 py-px text-[11px] text-[#8b93a1]">
-											{t(`permissions.level.${level}`)}
-										</span>
-									</div>
-									<p className="mt-0.5 text-[12.5px] leading-[18px] text-[#8b93a1]">
-										{t(`permissions.rows.${kind}.description`)}
-									</p>
-								</div>
-								<PermissionAction
-									kind={kind}
-									status={status}
-									busy={busy === kind}
-									onAct={() => void act(kind, status)}
-									t={t}
-								/>
-							</div>
-							{kind === "screen" && (
-								<ScreenHelp snapshot={snapshot} needsRelaunch={needsRelaunch} t={t} />
-							)}
-							{kind === "systemAudio" && <SystemAudioHelp status={status} t={t} />}
-						</li>
-					);
-				})}
-			</ul>
-
-			<div className="mt-auto flex items-center justify-between gap-4 pt-5">
-				<p className="text-[12.5px] leading-[18px] text-[#8b93a1]">
-					{screenReady ? t("permissions.footer.ready") : t("permissions.footer.screenRequired")}
-				</p>
-				{needsRelaunch ? (
+		<div className="flex h-screen flex-col bg-[#0b0c0f] px-6 py-6 text-white select-none">
+			<h1 className="text-[17px] font-semibold">Screen access</h1>
+			<p className="mt-1.5 text-[13px] leading-5 text-[#8b93a1]">
+				ProductIntel needs screen access only to capture or record. Imports work without it.
+			</p>
+			<div className="min-h-0 flex-1 overflow-y-auto pb-2">
+				{!snapshot ? (
+					<p className="mt-5 text-sm text-[#8b93a1]">Checking screen access…</p>
+				) : (
+					<>
+						{snapshot.screenRequired ? (
+							<ul className="mt-5">{rows.filter((row) => row.kind === "screen").map(renderRow)}</ul>
+						) : (
+							<p className="mt-5 text-[13px] text-[#8b93a1]">
+								Choose a screen or window in the macOS picker when you record.
+							</p>
+						)}
+						<details className="mt-4 text-[13px] text-[#8b93a1]">
+							<summary className="cursor-pointer py-1">
+								More · optional recording permissions
+							</summary>
+							<ul className="mt-2 flex flex-col gap-2">
+								{rows.filter((row) => row.kind !== "screen").map(renderRow)}
+							</ul>
+						</details>
+					</>
+				)}
+				{error && (
+					<p role="alert" className="mt-3 text-[13px] text-[#fda4af]">
+						{error}
+					</p>
+				)}
+			</div>
+			<div className="flex justify-end gap-3 border-t border-[#20232a] pt-4">
+				<button
+					type="button"
+					data-testid="permissions-start"
+					onClick={() => void runWindowAction("close")}
+					className="h-9 rounded-[9px] bg-[#1f232b] px-4 text-[13px] font-medium hover:bg-[#2a2f39]"
+				>
+					Done
+				</button>
+				{needsRelaunch && (
 					<button
 						type="button"
 						data-testid="permissions-relaunch"
-						onClick={() => void window.electronAPI.permissions.relaunch()}
-						className="h-9 shrink-0 rounded-[9px] bg-[#10b981] px-5 text-[13px] font-semibold text-[#08090d] hover:bg-[#10b981]/85"
+						onClick={() => void runWindowAction("relaunch")}
+						className="h-9 rounded-[9px] bg-[#10b981] px-4 text-[13px] font-semibold text-[#08090d] hover:bg-[#10b981]/85"
 					>
-						{t("permissions.actions.restart")}
-					</button>
-				) : (
-					<button
-						type="button"
-						data-testid="permissions-start"
-						disabled={!screenReady}
-						onClick={() => void window.electronAPI.permissions.close()}
-						className="h-9 shrink-0 rounded-[9px] bg-[#10b981] px-5 text-[13px] font-semibold text-[#08090d] hover:bg-[#10b981]/85 disabled:cursor-not-allowed disabled:opacity-50"
-					>
-						{t("permissions.actions.start")}
+						Restart ProductIntel
 					</button>
 				)}
 			</div>
@@ -240,22 +268,17 @@ function PermissionAction({
 	);
 }
 
-function ScreenHelp({
-	snapshot,
-	needsRelaunch,
-	t,
-}: {
-	snapshot: Snapshot;
-	needsRelaunch: boolean;
-	t: T;
-}) {
+function ScreenHelp({ snapshot, needsRelaunch }: { snapshot: Snapshot; needsRelaunch: boolean }) {
 	const lines: string[] = [];
 	if (needsRelaunch) {
-		lines.push(t("permissions.help.screenRestart"));
+		lines.push("Screen access is allowed. Restart ProductIntel before recording.");
 	} else if (snapshot.screen === "denied") {
-		lines.push(t("permissions.help.screenSettings"), t("permissions.help.screenNotListed"));
+		lines.push(
+			"Turn on ProductIntel in System Settings.",
+			"Not listed? Click + and choose ProductIntel in Applications.",
+		);
 	} else if (snapshot.screen === "not-requested") {
-		lines.push(t("permissions.help.screenPrompt"));
+		lines.push("macOS will ask you to enable ProductIntel in System Settings.");
 	}
 	// Captures started from Apple's picker never raise that alert, so there is nothing to
 	// warn about when the picker owns the choice.
@@ -264,7 +287,7 @@ function ScreenHelp({
 		snapshot.screen === "granted" &&
 		snapshot.macosMajor >= RECURRING_SCREEN_ALERT_FROM_MACOS
 	) {
-		lines.push(t("permissions.help.screenRecurring"));
+		lines.push("macOS may ask again before recording. Allow screen access to continue.");
 	}
 	if (lines.length === 0) {
 		return null;
@@ -280,12 +303,12 @@ function ScreenHelp({
 	);
 }
 
-function SystemAudioHelp({ status, t }: { status: Status; t: T }) {
+function SystemAudioHelp({ status }: { status: Status }) {
 	const line =
 		status === "not-requested"
-			? t("permissions.help.systemAudioPrompt")
+			? "macOS will ask whether ProductIntel may record system audio."
 			: status === "requested"
-				? t("permissions.help.systemAudioRequested")
+				? "If access was denied, enable ProductIntel under System Audio Recording Only in System Settings."
 				: null;
 	if (!line) {
 		return null;

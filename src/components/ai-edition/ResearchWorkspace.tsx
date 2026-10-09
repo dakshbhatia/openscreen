@@ -1,4 +1,4 @@
-import { Circle, FileVideo2, Upload } from "lucide-react";
+import { Circle, FileVideo2, Images, Upload, Video } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AxcutAsset } from "@/lib/ai-edition/schema";
@@ -86,7 +86,7 @@ export function ResearchWorkspace({
 						aria-controls="screenshots-panel"
 						onClick={() => setInputMode("screenshots")}
 					>
-						Screenshots
+						<Images size={14} aria-hidden /> Screenshots
 					</button>
 					<button
 						type="button"
@@ -97,7 +97,7 @@ export function ResearchWorkspace({
 						aria-controls="recording-panel"
 						onClick={() => setInputMode("recording")}
 					>
-						Recording
+						<Video size={14} aria-hidden /> Recording
 					</button>
 				</div>
 				<div

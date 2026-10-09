@@ -25,6 +25,7 @@ import {
 	screenshotDecisionSchema,
 	screenshotImageIdSchema,
 	screenshotImageSchema,
+	screenshotJourneySchema,
 	screenshotReadoutInsightSchema,
 	screenshotReadoutSchema,
 	screenshotUnderstandingSchema,
@@ -43,6 +44,7 @@ const currentAnalysisSchema = screenshotAnalysisSchema.extend({
 		.min(1)
 		.max(MAX_SCREENSHOT_IMAGES),
 	readout: screenshotReadoutSchema,
+	journey: screenshotJourneySchema,
 });
 const geminiReadoutInsightSchema = screenshotReadoutInsightSchema.extend({
 	evidenceImageIds: z.array(screenshotImageIdSchema),
@@ -56,6 +58,13 @@ const geminiAnalysisSchema = currentAnalysisSchema.extend({
 	readout: z.strictObject({
 		strengths: z.array(geminiReadoutInsightSchema),
 		frictions: z.array(geminiReadoutInsightSchema),
+	}),
+	journey: screenshotJourneySchema.extend({
+		stages: z.array(
+			screenshotJourneySchema.shape.stages.element.extend({
+				evidenceImageIds: z.array(screenshotImageIdSchema),
+			}),
+		),
 	}),
 });
 const screenGroupSchema = z.strictObject({
@@ -472,6 +481,7 @@ export class ScreenshotIntelService {
 						"The complete screenshot evidence is too large to synthesize safely. No report was replaced.",
 					);
 				const context = JSON.stringify({
+					researchGoal: settings.researchGoal,
 					productBrief: settings.productBrief,
 					companyDomain: settings.companyDomain,
 					competitor: settings.competitor,

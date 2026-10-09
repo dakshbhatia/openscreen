@@ -14,6 +14,7 @@ import type { ChatEventSink } from "../ai-edition/chat-service";
 import type { DocumentService } from "../ai-edition/document-service";
 import { ProductIntelService } from "../ai-edition/product-intel-service";
 import { PROVIDER_DEFINITIONS } from "../ai-edition/provider-registry";
+import { ScreenshotCapture } from "../ai-edition/screenshot-capture";
 import { ScreenshotIntelService } from "../ai-edition/screenshot-intel-service";
 import { StylePresetError, type StylePresetService } from "../ai-edition/style-preset-service";
 import { isValidMcpPort } from "../mcp/mcp-settings-store";
@@ -281,6 +282,7 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 				return context.getAiEditionLlmConfig().getApiKey("google", google?.envKeys ?? []);
 			},
 		));
+	const screenshotCapture = new ScreenshotCapture((paths) => screenshots().import(paths));
 	ipcMain.handle(NATIVE_BRIDGE_CHANNEL, async (event, request: unknown) => {
 		if (!isBridgeRequest(request)) {
 			return createErrorResponse(undefined, "INVALID_REQUEST", "Invalid native bridge request.");
@@ -542,6 +544,27 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 				case "aiEdition": {
 					const action = request.action as string;
 					switch (request.action) {
+						case "screenshots.captureAccess":
+							return createSuccessResponse(
+								requestId,
+								await screenshotCapture.access(context.getPlatform()),
+							);
+						case "screenshots.openCaptureSettings": {
+							if (context.getPlatform() === "darwin") {
+								const { getMacPermissions } = await import("../permissions");
+								await getMacPermissions().request("screen");
+								await getMacPermissions().openSettings("screen");
+							}
+							return createSuccessResponse(requestId, undefined);
+						}
+						case "screenshots.capture":
+							return createSuccessResponse(
+								requestId,
+								await screenshotCapture.capture(
+									BrowserWindow.fromWebContents(event.sender),
+									context.getPlatform(),
+								),
+							);
 						case "screenshots.pick": {
 							const result = await showOpenDialogOver(BrowserWindow.fromWebContents(event.sender), {
 								title: "Import screenshots",

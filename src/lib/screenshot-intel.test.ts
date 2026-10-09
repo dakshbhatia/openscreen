@@ -414,3 +414,62 @@ describe("screenshot intelligence contract", () => {
 		expect(SCREENSHOT_ANALYST_PROMPT).toContain("beautiful, good or bad are not reasons");
 	});
 });
+
+describe("goal-led screenshot maps", () => {
+	const journey = {
+		goal: "Organize shared work",
+		goalBasis: "inferred",
+		coverage: "collection",
+		outcome: "Screens show workspace setup; successful creation is not established.",
+		stages: [
+			{
+				name: "Workspace setup",
+				purpose: "Give shared projects a recognizable place.",
+				evidenceImageIds: [images[1].id, images[0].id],
+			},
+		],
+	};
+	it("accepts unordered evidence and legacy maps without inventing chronology", () => {
+		expect(parseScreenshotAnalysis({ ...analysis, journey }, images).journey).toEqual(journey);
+		expect(parseScreenshotAnalysis(analysis, images)).not.toHaveProperty("journey");
+		expect(
+			parseScreenshotAnalysis(
+				{ ...analysis, journey: { ...journey, goalBasis: "unknown", stages: [] } },
+				images,
+			).journey?.stages,
+		).toEqual([]);
+	});
+	it("rejects fabricated evidence, sequence coverage and oversized maps in responses and saved batches", () => {
+		const stage = journey.stages[0];
+		for (const candidate of [
+			{ ...journey, coverage: "complete" },
+			{ ...journey, stages: [{ ...stage, evidenceImageIds: [] }] },
+			{ ...journey, stages: [{ ...stage, evidenceImageIds: [images[0].id, images[0].id] }] },
+			{
+				...journey,
+				stages: [{ ...stage, evidenceImageIds: ["image_00000000-0000-0000-0000-000000000099"] }],
+			},
+			{ ...journey, stages: Array.from({ length: 9 }, () => stage) },
+		]) {
+			expect(() => parseScreenshotAnalysis({ ...analysis, journey: candidate }, images)).toThrow();
+			expect(
+				screenshotBatchSchema.safeParse({
+					id: "batch_00000000-0000-0000-0000-000000000001",
+					title: "Map",
+					createdAt: new Date().toISOString(),
+					images,
+					analysis: { ...analysis, journey: candidate },
+				}).success,
+			).toBe(false);
+		}
+	});
+	it("sends exact research questions separately from user tasks", () => {
+		const researchGoal = "  Why upfront workspace naming?\nMY question!  ";
+		const prompt = buildScreenshotPrompt(
+			{ ...DEFAULT_INTEL_SETTINGS, researchGoal, task: "Create workspace" },
+			images,
+		);
+		expect(prompt).toContain(JSON.stringify(researchGoal));
+		expect(prompt).toContain('"task":"Create workspace"');
+	});
+});

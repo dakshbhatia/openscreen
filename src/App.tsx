@@ -13,7 +13,6 @@ import { PermissionsWindow } from "./components/permissions/PermissionsWindow";
 import { Toaster } from "./components/ui/sonner";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { EditorDialogsProvider } from "./contexts/EditorDialogsContext";
-import { useScopedT } from "./contexts/I18nContext";
 import { ShortcutsProvider } from "./contexts/ShortcutsContext";
 import { loadAllCustomFonts } from "./lib/customFonts";
 import { registerTextFontFaces } from "./lib/textFonts";
@@ -43,8 +42,6 @@ export default function App() {
 		() => new URLSearchParams(window.location.search).get("windowType") || "",
 	);
 	const showNotes = new URLSearchParams(window.location.search).get("showNotes") === "true";
-
-	const tEditor = useScopedT("editor");
 
 	useEffect(() => {
 		const type = new URLSearchParams(window.location.search).get("windowType") || "";
@@ -116,6 +113,7 @@ export default function App() {
 					</Suspense>
 				);
 			case "editor":
+			default:
 				return (
 					<ShortcutsProvider>
 						<EditorDialogsProvider>
@@ -144,7 +142,7 @@ export default function App() {
 												d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
 											/>
 										</svg>
-										<span className="text-[var(--muted)] text-sm">{tEditor("loadingEditor")}</span>
+										<span className="text-[var(--muted)] text-sm">Opening ProductIntel…</span>
 									</div>
 								}
 							>
@@ -154,14 +152,6 @@ export default function App() {
 							</Suspense>
 						</EditorDialogsProvider>
 					</ShortcutsProvider>
-				);
-			default:
-				return (
-					<div>
-						<div className="w-full h-full bg-background text-foreground">
-							<h1>Openscreen</h1>
-						</div>
-					</div>
 				);
 		}
 	})();

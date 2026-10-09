@@ -95,6 +95,20 @@ export async function requireNativeBridgeData<TData>(request: NativeBridgeReques
 export const nativeBridgeClient = {
 	rawInvoke: invokeNativeBridge,
 	screenshotIntel: {
+		captureAccess: () =>
+			requireNativeBridgeData<{
+				status: "granted" | "not-determined" | "denied" | "restricted" | "unknown";
+			}>({ domain: "aiEdition", action: "screenshots.captureAccess" }),
+		openCaptureSettings: () =>
+			requireNativeBridgeData<void>({
+				domain: "aiEdition",
+				action: "screenshots.openCaptureSettings",
+			}),
+		capture: () =>
+			requireNativeBridgeData<import("../lib/screenshot-intel").ScreenshotBatch | null>({
+				domain: "aiEdition",
+				action: "screenshots.capture",
+			}),
 		pick: () =>
 			requireNativeBridgeData<import("../lib/screenshot-intel").ScreenshotBatch | null>({
 				domain: "aiEdition",

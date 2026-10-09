@@ -126,9 +126,12 @@ describe("NewEditorShell timeline height", () => {
 	});
 
 	it("imports directly into a dedicated research project without opening the media editor", async () => {
-		const originalCreate = useProjectStore.getState().createProject;
-		const originalAdd = useProjectStore.getState().addAsset;
-		const create = vi.fn().mockResolvedValue(undefined);
+		const originalState = useProjectStore.getState();
+		const created = createEmptyDocument({ projectId: "imported-project", title: "flow" });
+		const create = vi.fn().mockImplementation(async () => {
+			useProjectStore.setState({ projectId: created.project.id, document: created, dirty: false });
+			return created;
+		});
 		const add = vi.fn().mockResolvedValue({ id: "imported" });
 		const picker = vi
 			.fn()
@@ -147,7 +150,7 @@ describe("NewEditorShell timeline height", () => {
 				"true",
 			);
 		} finally {
-			useProjectStore.setState({ createProject: originalCreate, addAsset: originalAdd });
+			act(() => useProjectStore.setState(originalState));
 		}
 	});
 

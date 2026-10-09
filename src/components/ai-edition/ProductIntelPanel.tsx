@@ -7,6 +7,8 @@ import {
 	type IntelReport,
 	type IntelSettings,
 	PRODUCT_ANALYST_PROMPT,
+	type ProductDecision,
+	type ProductReadoutInsight,
 } from "@/lib/product-intel";
 import {
 	getReportCompanyContext,
@@ -65,6 +67,10 @@ export function ProductIntelPanel({
 	const [saved, setSaved] = useState(false);
 	const [report, setReport] = useState<IntelReport | null>(null);
 	const [evidenceTime, setEvidenceTime] = useState<number | null>(null);
+	const [moreFindings, setMoreFindings] = useState(false);
+	const [moreDecisions, setMoreDecisions] = useState(false);
+	const [morePieces, setMorePieces] = useState(false);
+	const [summaryExpanded, setSummaryExpanded] = useState(false);
 	const video = useRef<HTMLVideoElement>(null);
 	const researchSettings = useRef<HTMLDetailsElement>(null);
 	const keyInput = useRef<HTMLInputElement>(null);
@@ -75,6 +81,8 @@ export function ProductIntelPanel({
 	const autoStarted = useRef<string | null>(null);
 	const active = useRef(false);
 	const requestVersion = useRef(0);
+	const cancelRequested = useRef(false);
+	const analysisStarted = useRef(false);
 
 	// Project changes invalidate old saves as well as old analysis completions.
 	useEffect(() => {
@@ -89,6 +97,12 @@ export function ProductIntelPanel({
 		setBusy(false);
 		setStatus("");
 		setBackendPending(null);
+		cancelRequested.current = false;
+		analysisStarted.current = false;
+		setMoreFindings(false);
+		setMoreDecisions(false);
+		setMorePieces(false);
+		setSummaryExpanded(false);
 	}, [projectId]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: loadAttempt explicitly retries failed snapshot loading.
@@ -144,6 +158,7 @@ export function ProductIntelPanel({
 					setReport(snapshot.report);
 					setBackendPending(null);
 					active.current = false;
+					analysisStarted.current = false;
 					setBusy(false);
 					setStatus("");
 				})
@@ -184,6 +199,8 @@ export function ProductIntelPanel({
 		async (automatic = false) => {
 			if (!projectId || !source || active.current || !connected) return;
 			active.current = true;
+			cancelRequested.current = false;
+			analysisStarted.current = false;
 			const version = ++requestVersion.current;
 			setBusy(true);
 			setError("");
@@ -205,10 +222,16 @@ export function ProductIntelPanel({
 					if (!(await persistSettings(settings, projectId))) return;
 				}
 				if (version !== requestVersion.current || currentProject.current !== projectId) return;
+				if (cancelRequested.current) throw new Error("Analysis cancelled");
+				analysisStarted.current = true;
 				const result = await nativeBridgeClient.productIntel.analyze(projectId, automatic);
 				if (version === requestVersion.current && currentProject.current === projectId) {
 					setReport(result);
 					setEvidenceTime(null);
+					setMoreFindings(false);
+					setMoreDecisions(false);
+					setMorePieces(false);
+					setSummaryExpanded(false);
 				}
 			} catch (err) {
 				if (version === requestVersion.current) setError(message(err));
@@ -216,6 +239,7 @@ export function ProductIntelPanel({
 				clearInterval(poll);
 				if (version === requestVersion.current) {
 					active.current = false;
+					analysisStarted.current = false;
 					setBusy(false);
 					setStatus("");
 				}
@@ -234,6 +258,7 @@ export function ProductIntelPanel({
 			source.durationSec <= 0 ||
 			!projectId ||
 			projectId !== freshRecordingProjectId ||
+			(report?.projectId === projectId && report.assetId === source.assetId) ||
 			autoStarted.current === projectId
 		)
 			return;
@@ -246,6 +271,7 @@ export function ProductIntelPanel({
 		source,
 		projectId,
 		freshRecordingProjectId,
+		report,
 		analyze,
 	]);
 
@@ -305,11 +331,17 @@ export function ProductIntelPanel({
 	const visibleReport =
 		report?.projectId === projectId && report.assetId === source?.assetId ? report : null;
 	const companyContext = visibleReport ? getReportCompanyContext(visibleReport) : undefined;
+	const analysis = visibleReport?.analysis;
+	const extraFindings = analysis?.readout
+		? Math.max(0, analysis.readout.strengths.length - 1) +
+			Math.max(0, analysis.readout.frictions.length - 1)
+		: 0;
 
 	const contextChanged =
 		visibleReport !== null &&
 		((visibleReport.settings.companyDomain ?? "") !== (settings.companyDomain ?? "") ||
 			visibleReport.settings.productBrief !== settings.productBrief ||
+			(visibleReport.settings.researchGoal ?? "") !== (settings.researchGoal ?? "") ||
 			visibleReport.settings.competitor !== settings.competitor ||
 			visibleReport.settings.task !== settings.task ||
 			visibleReport.settings.model !== settings.model ||
@@ -376,6 +408,221 @@ export function ProductIntelPanel({
 			</details>
 		</article>
 	);
+	function renderEvidence(title: string, times: number[]) {
+		const button = (time: number) => (
+			<button
+				key={time}
+				type="button"
+				className={styles.textButton}
+				aria-label={`Evidence for ${title} at ${timecode(time)}`}
+				onClick={() => seek(time)}
+			>
+				{timecode(time)} <ArrowUpRight size={12} />
+			</button>
+		);
+		return (
+			<div className={styles.evidence}>
+				{times.length ? (
+					<>
+						{button(times[0])}
+						{times.length > 1 ? (
+							<details className={styles.reasoning}>
+								<summary>More evidence ({times.length - 1})</summary>
+								{times.slice(1).map(button)}
+							</details>
+						) : null}
+					</>
+				) : null}
+			</div>
+		);
+	}
+	function renderInsight(insight: ProductReadoutInsight, index: number) {
+		return (
+			<article className={styles.insight} key={`${insight.title}-${index}`}>
+				<h5>{insight.title}</h5>
+				<p>{insight.reason}</p>
+				<small>
+					{insight.basis} · {insight.confidence} confidence
+				</small>
+				{renderEvidence(insight.title, insight.evidenceTimesSec)}
+			</article>
+		);
+	}
+	function renderDecision(decision: ProductDecision, index: number) {
+		return (
+			<article className={styles.decision} key={`${decision.title}-${index}`}>
+				<small>
+					{decision.recommendation} · {decision.confidence} confidence
+				</small>
+				<h5>{decision.title}</h5>
+				<p>{decision.experiment}</p>
+				<details className={styles.reasoning}>
+					<summary>Why, alternatives & tradeoff</summary>
+					<p>
+						<strong>Why</strong>
+						{decision.rationale}
+					</p>
+					<p>
+						<strong>Counter-evidence</strong>
+						{decision.counterEvidence}
+					</p>
+					<p>
+						<strong>Tradeoff</strong>
+						{decision.tradeoff}
+					</p>
+				</details>
+				{renderEvidence(decision.title, decision.evidenceTimesSec)}
+			</article>
+		);
+	}
+	const analyzeButton = (
+		<button
+			type="button"
+			className={styles.primary}
+			disabled={!loaded || !source || source.durationSec <= 0 || busy || keyBusy}
+			onClick={() => {
+				if (!connected) {
+					if (researchSettings.current) researchSettings.current.open = true;
+					keyInput.current?.focus();
+					return;
+				}
+				void analyze();
+			}}
+		>
+			{busy ? <LoaderCircle size={16} className={styles.spin} /> : <Sparkles size={16} />}
+			{busy ? "Analyzing…" : "Analyze flow"}
+		</button>
+	);
+	const fullSummary =
+		visibleReport && analysis?.readout ? (
+			<details
+				className={styles.reasoning}
+				open={summaryExpanded}
+				onToggle={(event) => setSummaryExpanded(event.currentTarget.open)}
+			>
+				<summary>Full summary</summary>
+				<p>{visibleReport.analysis.summary}</p>
+			</details>
+		) : null;
+	const journey = analysis?.journey;
+	const briefContext =
+		analysis?.understanding || journey ? (
+			<div className={styles.understanding}>
+				{analysis?.understanding ? (
+					<p>
+						<strong>Product</strong>
+						{analysis.understanding.product}
+					</p>
+				) : null}
+				{journey ? (
+					<p className={styles.goal}>
+						<strong>
+							Goal{" "}
+							<small>
+								{journey.goalBasis === "supplied"
+									? "Supplied"
+									: journey.goalBasis === "inferred"
+										? "Inferred from recording"
+										: "Unknown"}
+							</small>
+						</strong>
+						{journey.goal}
+					</p>
+				) : analysis?.understanding ? (
+					<p>
+						<strong>Job to be done</strong>
+						{analysis.understanding.job}
+					</p>
+				) : null}
+				{analysis?.understanding ? (
+					<details className={styles.reasoning}>
+						<summary>Audience & confidence</summary>
+						{journey ? (
+							<p>
+								<strong>Job to be done</strong>
+								{analysis.understanding.job}
+							</p>
+						) : null}
+						<p>
+							{analysis.understanding.audience} · {analysis.understanding.confidence} confidence
+						</p>
+					</details>
+				) : null}
+			</div>
+		) : null;
+	const journeyDetails = journey ? (
+		<details
+			className={styles.exploreJourney}
+			key={`${visibleReport?.createdAt}-${visibleReport?.assetId}`}
+		>
+			<summary>Explore journey</summary>
+			<p className={styles.fineprint}>
+				{journey.coverage === "complete"
+					? "Complete visible task in this recording. This does not establish the whole product journey."
+					: "Partial recording. Task stages before or after this clip may be missing."}
+			</p>
+			<ol className={styles.stages}>
+				{journey.stages.map((stage, index) => (
+					<li key={`${stage.name}-${index}`}>
+						<h5>{stage.name}</h5>
+						<p>{stage.purpose}</p>
+						{renderEvidence(stage.name, stage.evidenceTimesSec)}
+					</li>
+				))}
+			</ol>
+			<p className={styles.journeyOutcome}>
+				<strong>Visible outcome</strong>
+				{journey.outcome}
+			</p>
+		</details>
+	) : null;
+
+	const researchDetails = visibleReport ? (
+		<details className={styles.reportDetails} open={!analysis?.readout}>
+			<summary>Research details</summary>
+			<p className={styles.fineprint}>
+				{visibleReport.settings.competitor || "Unlabelled competitor"} ·{" "}
+				{new Date(visibleReport.createdAt).toLocaleDateString()} · {visibleReport.settings.model}
+			</p>
+			{companyContext ? (
+				<p className={styles.fineprint}>
+					{companyContext.status === "retrieved" ? (
+						<>
+							Company website retrieved:{" "}
+							{companyContext.sourceUrls.map((url, index) => (
+								<span key={url}>
+									{index ? ", " : ""}
+									<a href={url} target="_blank" rel="noreferrer">
+										{new URL(url).hostname}
+									</a>
+								</span>
+							))}
+						</>
+					) : (
+						"Company website unavailable; retrieval was not confirmed. Company fit remains provisional."
+					)}
+				</p>
+			) : null}
+			<details className={styles.more}>
+				<summary>
+					The journey ({visibleReport.analysis.steps.length}{" "}
+					{visibleReport.analysis.steps.length === 1 ? "step" : "steps"})
+				</summary>
+				<ol className={styles.journey}>
+					{visibleReport.analysis.steps.map((step, index) => (
+						<li key={`${step.timeSec}-${index}`}>
+							<button type="button" onClick={() => seek(step.timeSec)}>
+								<span className={styles.time}>{timecode(step.timeSec)}</span>
+								<strong>{step.action}</strong>
+								<ArrowUpRight size={13} />
+							</button>
+							<p>{step.evidence}</p>
+						</li>
+					))}
+				</ol>
+			</details>
+		</details>
+	) : null;
 	const content = (
 		<>
 			<header className={styles.header}>
@@ -399,28 +646,42 @@ export function ProductIntelPanel({
 			</header>
 			<div className={styles.layout}>
 				<section className={styles.context} aria-label="Product context">
-					<div className={styles.sectionHeading}>
-						<h3>Product context</h3>
-						{saved ? (
-							<span className={styles.saved}>
-								<Check size={12} /> Saved
-							</span>
-						) : null}
-					</div>
-					<label>
-						Our product
-						<textarea
-							aria-label="Our product"
-							rows={3}
-							placeholder="Audience, goal, and what makes our approach different"
-							value={settings.productBrief}
-							onChange={(e) => update("productBrief", e.target.value)}
-							onBlur={() => void saveSettings()}
-							disabled={!loaded || busy}
-						/>
-					</label>
 					<details className={styles.advanced} ref={researchSettings}>
 						<summary>Research settings</summary>
+						<div className={styles.sectionHeading}>
+							<h3>Product context</h3>
+							{saved ? (
+								<span className={styles.saved}>
+									<Check size={12} /> Saved
+								</span>
+							) : null}
+						</div>
+						<label>
+							Our product
+							<textarea
+								aria-label="Our product"
+								rows={3}
+								placeholder="Optional: audience, goal, or constraints the recording doesn’t show"
+								value={settings.productBrief}
+								onChange={(e) => update("productBrief", e.target.value)}
+								onBlur={() => void saveSettings()}
+								disabled={!loaded || busy}
+							/>
+						</label>
+						<label>
+							What are you trying to learn?
+							<textarea
+								aria-label="What are you trying to learn?"
+								rows={2}
+								maxLength={2000}
+								placeholder="Optional research goal"
+								value={settings.researchGoal ?? ""}
+								onChange={(e) => update("researchGoal", e.target.value)}
+								onBlur={() => void saveSettings()}
+								disabled={!loaded || busy}
+							/>
+						</label>
+
 						{keySetup}
 						<label>
 							Company domain (optional)
@@ -539,45 +800,38 @@ export function ProductIntelPanel({
 							) : null}
 						</div>
 					) : null}
-					<div className={styles.actions}>
-						<button
-							type="button"
-							className={styles.primary}
-							disabled={!loaded || !source || source.durationSec <= 0 || busy || keyBusy}
-							onClick={() => {
-								if (!connected) {
-									if (researchSettings.current) researchSettings.current.open = true;
-									keyInput.current?.focus();
-									return;
-								}
-								void analyze();
-							}}
-						>
-							{busy ? <LoaderCircle size={16} className={styles.spin} /> : <Sparkles size={16} />}
-							{busy ? "Analyzing…" : "Analyze flow"}
-						</button>
-					</div>
+					{!visibleReport ? <div className={styles.actions}>{analyzeButton}</div> : null}
 				</section>
 				<section className={styles.report} aria-label="Product analysis">
 					<div className={styles.sectionHeading}>
-						<h3>Takeaways</h3>
+						<h3>{analysis?.readout ? "Product brief" : "Takeaways"}</h3>
 						{visibleReport ? (
-							<div className={styles.exports}>
-								<button
-									type="button"
-									className={styles.textButton}
-									onClick={() => download("markdown")}
-								>
-									<Download size={13} /> Markdown
-								</button>
-								<button
-									type="button"
-									className={styles.textButton}
-									onClick={() => download("json")}
-								>
-									JSON
-								</button>
-							</div>
+							<details className={styles.reportMore}>
+								<summary aria-label="More report actions">More</summary>
+								<div className={styles.exports}>
+									{analysis?.readout ? (
+										<>
+											{fullSummary}
+											{researchDetails}
+										</>
+									) : null}
+									<button
+										type="button"
+										className={styles.textButton}
+										onClick={() => download("markdown")}
+									>
+										<Download size={13} /> Markdown
+									</button>
+									<button
+										type="button"
+										className={styles.textButton}
+										onClick={() => download("json")}
+									>
+										JSON
+									</button>
+									{analyzeButton}
+								</div>
+							</details>
 						) : null}
 					</div>
 					{busy ? (
@@ -587,12 +841,14 @@ export function ProductIntelPanel({
 							<button
 								type="button"
 								className={styles.textButton}
-								onClick={() =>
-									projectId &&
-									void nativeBridgeClient.productIntel
-										.cancel(projectId)
-										.catch((err) => setError(message(err)))
-								}
+								onClick={() => {
+									cancelRequested.current = true;
+									if (projectId && (analysisStarted.current || backendPending)) {
+										void nativeBridgeClient.productIntel
+											.cancel(projectId)
+											.catch((err) => setError(message(err)));
+									}
+								}}
 							>
 								Cancel analysis
 							</button>
@@ -605,7 +861,7 @@ export function ProductIntelPanel({
 							<p>
 								{!source
 									? "Record or import a product flow to begin."
-									: "Add your product context to make the takeaways relevant."}
+									: "Analyze the recording to find product patterns and next steps."}
 							</p>
 						</div>
 					) : null}
@@ -616,39 +872,125 @@ export function ProductIntelPanel({
 									Context changed. Analyze again to update these takeaways.
 								</div>
 							) : null}
-							<p className={styles.summary}>{visibleReport.analysis.summary}</p>
-							<p className={styles.fineprint}>
-								{visibleReport.settings.competitor || "Unlabelled competitor"} ·{" "}
-								{new Date(visibleReport.createdAt).toLocaleDateString()} ·{" "}
-								{visibleReport.settings.model}
-							</p>
-							{companyContext ? (
-								<p className={styles.fineprint}>
-									{companyContext.status === "retrieved" ? (
-										<>
-											Company website retrieved:{" "}
-											{companyContext.sourceUrls.map((url, index) => (
-												<span key={url}>
-													{index ? ", " : ""}
-													<a href={url} target="_blank" rel="noreferrer">
-														{new URL(url).hostname}
-													</a>
-												</span>
-											))}
-										</>
+							{!analysis?.readout ? (
+								<>
+									<p className={styles.summary}>{visibleReport.analysis.summary}</p>
+									{briefContext}
+									{journeyDetails}
+									{researchDetails}
+								</>
+							) : null}
+							{analysis?.readout ? (
+								<>
+									{analysis.pieces?.length ? (
+										<section className={styles.pieces} aria-label="Product pieces">
+											<p className={styles.fineprint}>Product pieces · {analysis.pieces.length}</p>
+											<div id="recording-product-pieces">
+												{analysis.pieces
+													.slice(0, morePieces ? analysis.pieces.length : 4)
+													.map((piece, index) => (
+														<button
+															type="button"
+															key={`${piece.name}-${index}`}
+															aria-label={`View ${piece.name} at ${timecode(piece.timeSec)}`}
+															onClick={() => seek(piece.timeSec)}
+														>
+															<span className={styles.time}>
+																{timecode(piece.timeSec)} <ArrowUpRight size={12} />
+															</span>
+															<strong>{piece.name}</strong>
+															<p>{piece.purpose}</p>
+														</button>
+													))}
+											</div>
+											{analysis.pieces.length > 4 ? (
+												<button
+													type="button"
+													className={styles.textButton}
+													aria-expanded={morePieces}
+													aria-controls="recording-product-pieces"
+													onClick={() => setMorePieces((shown) => !shown)}
+												>
+													{morePieces
+														? "Fewer pieces"
+														: `More pieces (${analysis.pieces.length - 4})`}
+												</button>
+											) : null}
+										</section>
+									) : null}
+									{briefContext}
+									{journeyDetails}
+									<div className={styles.readout}>
+										<section aria-label="Works well">
+											<h4>Works well</h4>
+											{analysis.readout.strengths.length ? (
+												analysis.readout.strengths.slice(0, moreFindings ? 3 : 1).map(renderInsight)
+											) : (
+												<p className={styles.fineprint}>
+													No supported strengths in this recording.
+												</p>
+											)}
+										</section>
+										<section aria-label="Creates friction">
+											<h4>Creates friction</h4>
+											{analysis.readout.frictions.length ? (
+												analysis.readout.frictions.slice(0, moreFindings ? 3 : 1).map(renderInsight)
+											) : (
+												<p className={styles.fineprint}>No supported friction in this recording.</p>
+											)}
+										</section>
+									</div>
+									{extraFindings ? (
+										<button
+											type="button"
+											className={styles.textButton}
+											aria-expanded={moreFindings}
+											onClick={() => setMoreFindings((shown) => !shown)}
+										>
+											{moreFindings ? "Fewer findings" : `More findings (${extraFindings})`}
+										</button>
+									) : null}
+									<h4 className={styles.nextHeading}>Recommended next step</h4>
+									{analysis.decisions?.length ? (
+										analysis.decisions.slice(0, moreDecisions ? 3 : 1).map(renderDecision)
 									) : (
-										"Company website unavailable; retrieval was not confirmed. Company fit remains provisional."
+										<p className={styles.fineprint}>No supported product decision yet.</p>
 									)}
-								</p>
-							) : null}
-							{visibleReport.analysis.findings.slice(0, 3).map(renderFinding)}
-							{visibleReport.analysis.findings.length > 3 ? (
-								<details className={styles.more}>
-									<summary>More findings ({visibleReport.analysis.findings.length - 3})</summary>
-									{visibleReport.analysis.findings.slice(3).map(renderFinding)}
-								</details>
-							) : null}
-							{source ? (
+									{analysis.decisions && analysis.decisions.length > 1 ? (
+										<button
+											type="button"
+											className={styles.textButton}
+											aria-expanded={moreDecisions}
+											onClick={() => setMoreDecisions((shown) => !shown)}
+										>
+											{moreDecisions
+												? "Fewer decisions"
+												: `More decisions (${analysis.decisions.length - 1})`}
+										</button>
+									) : null}
+
+									<button
+										type="button"
+										className={styles.textButton}
+										onClick={() => (evidenceTime === null ? seek(0) : setEvidenceTime(null))}
+									>
+										{evidenceTime === null ? "View recording" : "Hide recording"}
+									</button>
+								</>
+							) : (
+								<>
+									{visibleReport.analysis.findings.slice(0, 1).map(renderFinding)}
+									{visibleReport.analysis.findings.length > 1 ? (
+										<details className={styles.more}>
+											<summary>
+												More findings ({visibleReport.analysis.findings.length - 1})
+											</summary>
+											{visibleReport.analysis.findings.slice(1).map(renderFinding)}
+										</details>
+									) : null}
+								</>
+							)}
+							{source && (!analysis?.readout || evidenceTime !== null) ? (
 								<video
 									ref={video}
 									className={styles.video}
@@ -657,29 +999,13 @@ export function ProductIntelPanel({
 									preload="metadata"
 									aria-label="Source recording"
 									onLoadedMetadata={() => {
-										if (video.current && evidenceTime !== null)
+										if (video.current && evidenceTime !== null) {
 											video.current.currentTime = evidenceTime;
+											video.current.scrollIntoView?.({ block: "nearest" });
+										}
 									}}
 								/>
 							) : null}
-							<details className={styles.more}>
-								<summary>
-									The journey ({visibleReport.analysis.steps.length}{" "}
-									{visibleReport.analysis.steps.length === 1 ? "step" : "steps"})
-								</summary>
-								<ol className={styles.journey}>
-									{visibleReport.analysis.steps.map((step, index) => (
-										<li key={`${step.timeSec}-${index}`}>
-											<button type="button" onClick={() => seek(step.timeSec)}>
-												<span className={styles.time}>{timecode(step.timeSec)}</span>
-												<strong>{step.action}</strong>
-												<ArrowUpRight size={13} />
-											</button>
-											<p>{step.evidence}</p>
-										</li>
-									))}
-								</ol>
-							</details>
 							{visibleReport.analysis.unknowns.length ? (
 								<details className={styles.unknowns}>
 									<summary>Unknowns ({visibleReport.analysis.unknowns.length})</summary>

@@ -484,12 +484,12 @@ describe("Research topbar", () => {
 		const actions = renderTopBar("Competitor", {}, "research");
 		expect(screen.getByText("Product intel")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Full editor" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Open project" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Recording projects" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
 		fireEvent.click(screen.getByLabelText("More app controls"));
 		fireEvent.click(screen.getByRole("button", { name: "Full editor" }));
 		expect(actions.onModeChange).toHaveBeenCalledWith("edit");
-		fireEvent.click(screen.getByRole("button", { name: "Open project" }));
+		fireEvent.click(screen.getByRole("button", { name: "Recording projects" }));
 		expect(actions.onOpenProject).toHaveBeenCalledOnce();
 		fireEvent.click(screen.getByRole("button", { name: "App settings" }));
 		expect(screen.getByRole("menuitem", { name: "providerSettings.title" })).toBeInTheDocument();

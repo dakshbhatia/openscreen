@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyDocument } from "../schema";
 import { useProjectStore } from "./projectStore";
 import { clearHistory, redo, undo, useUndoRedoShortcuts } from "./undo";
-import { future, past, pushHistory } from "./undoStack";
+import { future, past, pushFuture, pushHistory } from "./undoStack";
 
 const saveMock = vi.hoisted(() => vi.fn());
 
@@ -393,5 +393,111 @@ describe("the Edit menu's undo/redo route", () => {
 		expect(currentTitle()).toBe("Original");
 		expect(past).toHaveLength(1);
 		expect(persist).not.toHaveBeenCalled();
+	});
+
+	it("preserves both history stacks while disabled and uses the latest enabled value in stable handlers", () => {
+		const persist = vi.fn();
+		const { result, rerender } = renderHook(
+			({ enabled }) => useUndoRedoShortcuts(persist, enabled),
+			{ initialProps: { enabled: false } },
+		);
+		const handlers = result.current;
+		pushHistory({ projectId: PROJECT_ID, doc: titled("Older") });
+		pushFuture({ projectId: PROJECT_ID, doc: titled("Later") });
+		const beforePast = [...past];
+		const beforeFuture = [...future];
+		act(() => {
+			for (const shortcut of [
+				{ key: "z", ctrlKey: true },
+				{ key: "z", metaKey: true },
+				{ key: "z", ctrlKey: true, shiftKey: true },
+				{ key: "y", ctrlKey: true },
+			]) {
+				const event = new KeyboardEvent("keydown", { ...shortcut, cancelable: true });
+				window.dispatchEvent(event);
+				expect(event.defaultPrevented).toBe(false);
+			}
+			handlers.runUndo();
+			handlers.runRedo();
+		});
+		expect(currentTitle()).toBe("Original");
+		expect(past).toEqual(beforePast);
+		expect(future).toEqual(beforeFuture);
+		expect(persist).not.toHaveBeenCalled();
+
+		rerender({ enabled: true });
+		expect(result.current.runUndo).toBe(handlers.runUndo);
+		expect(result.current.runRedo).toBe(handlers.runRedo);
+		act(() => handlers.runUndo());
+		expect(currentTitle()).toBe("Older");
+		expect(persist).toHaveBeenCalledOnce();
+
+		rerender({ enabled: false });
+		const disabledFuture = [...future];
+		act(() => handlers.runRedo());
+		expect(currentTitle()).toBe("Older");
+		expect(future).toEqual(disabledFuture);
+		rerender({ enabled: true });
+		act(() => {
+			const event = new KeyboardEvent("keydown", {
+				key: "y",
+				ctrlKey: true,
+				cancelable: true,
+			});
+			window.dispatchEvent(event);
+			expect(event.defaultPrevented).toBe(true);
+		});
+		expect(currentTitle()).toBe("Original");
+		expect(persist).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([
+		"input",
+		"textarea",
+		"contenteditable",
+	])("preserves browser text undo/redo in %s while document history is disabled", (kind) => {
+		const persist = vi.fn();
+		const { result } = renderHook(() => useUndoRedoShortcuts(persist, false));
+		pushHistory({ projectId: PROJECT_ID, doc: titled("Older") });
+		pushFuture({ projectId: PROJECT_ID, doc: titled("Later") });
+		const beforePast = [...past];
+		const beforeFuture = [...future];
+		const field = window.document.createElement(kind === "contenteditable" ? "div" : kind);
+		if (kind === "contenteditable") {
+			field.tabIndex = 0;
+			// jsdom does not derive isContentEditable from the contenteditable attribute.
+			Object.defineProperty(field, "isContentEditable", { value: true });
+		}
+		window.document.body.appendChild(field);
+		field.focus();
+		const descriptor = Object.getOwnPropertyDescriptor(window.document, "execCommand");
+		const textCommand = vi.fn();
+		Object.defineProperty(window.document, "execCommand", {
+			configurable: true,
+			value: textCommand,
+		});
+		try {
+			act(() => {
+				result.current.runUndo();
+				result.current.runRedo();
+				const event = new KeyboardEvent("keydown", {
+					key: "z",
+					ctrlKey: true,
+					bubbles: true,
+					cancelable: true,
+				});
+				field.dispatchEvent(event);
+				expect(event.defaultPrevented).toBe(false);
+			});
+			expect(textCommand.mock.calls).toEqual([["undo"], ["redo"]]);
+			expect(currentTitle()).toBe("Original");
+			expect(past).toEqual(beforePast);
+			expect(future).toEqual(beforeFuture);
+			expect(persist).not.toHaveBeenCalled();
+		} finally {
+			if (descriptor) Object.defineProperty(window.document, "execCommand", descriptor);
+			else Reflect.deleteProperty(window.document, "execCommand");
+			field.remove();
+		}
 	});
 });

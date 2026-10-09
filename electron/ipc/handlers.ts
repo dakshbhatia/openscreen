@@ -142,6 +142,7 @@ import {
 } from "../recording-source-settings";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
 import { createNativeMacMidCaptureErrorWatch } from "./nativeMacMidCaptureErrorWatch";
+import { presentPickerForWindow } from "./pickerWindowRestore";
 import { registerRecordingPrefsHandlers } from "./recordingPrefs";
 import { RecordingStreamRegistry, registerRecordingStreamHandlers } from "./recordingStream";
 import { type SelectSourceContext, selectSourceWithOwnership } from "./selectSourceOwnership";
@@ -2114,22 +2115,9 @@ export function registerIpcHandlers(
 		// their frame, not by where clicks land -- so that invisible rectangle hid every
 		// window behind it from the picker. Its exclusion from the capture is by window id,
 		// so hiding it does not bring it back into a display pick.
-		const hud = getMainWindow();
-		const hideHud = !!hud && !hud.isDestroyed() && hud.isVisible();
-		if (hideHud) {
-			hud.hide();
-		}
-		let pick: MacPickerSelection | null;
-		try {
-			pick = await session.present(
-				excludedWindowIds,
-				appSettings.getSnapshot().recording.hideDesktopIcons,
-			);
-		} finally {
-			if (hideHud && !hud.isDestroyed()) {
-				hud.showInactive();
-			}
-		}
+		const pick = await presentPickerForWindow(getMainWindow(), () =>
+			session.present(excludedWindowIds, appSettings.getSnapshot().recording.hideDesktopIcons),
+		);
 		if (!pick) {
 			// Same signal our own picker window sends when it closes without a choice: the HUD
 			// stops waiting to record after a selection.

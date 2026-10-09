@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="tile" x1="9" y1="4" x2="54" y2="62" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#234D76"/>
+      <stop offset="1" stop-color="#102338"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="16" y1="16" x2="43" y2="43" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DBF5FF" stop-opacity=".26"/>
+      <stop offset="1" stop-color="#64DACC" stop-opacity=".06"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="31" y1="29" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B6F5EA"/>
+      <stop offset="1" stop-color="#56CABB"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#tile)"/>
+  <rect x="4.5" y="4.5" width="55" height="55" rx="13.5" stroke="#CAE9FF" stroke-opacity=".2"/>
+  <rect x="14" y="17" width="33" height="26" rx="4" fill="url(#glass)" stroke="#D5EDFC" stroke-width="2.5"/>
+  <path d="M15 24h31M23 25v16" stroke="#D5EDFC" stroke-opacity=".65" stroke-width="2"/>
+  <path d="m45 44 6 6" stroke="#112B40" stroke-width="7" stroke-linecap="round"/>
+  <path d="m45 44 6 6" stroke="url(#rim)" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="39" cy="37" r="9" fill="#17374D" stroke="url(#rim)" stroke-width="3"/>
+  <path d="M35 37h8m-4-4v8" stroke="#B6F5EA" stroke-width="2" stroke-linecap="round"/>
+</svg>

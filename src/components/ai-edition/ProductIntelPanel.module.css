@@ -93,3 +93,51 @@
 @media (prefers-reduced-transparency: reduce) { .panel { background: var(--bg) !important; backdrop-filter: none; -webkit-backdrop-filter: none; } }
 .embedded .header { display: none; }
 .sectionHeading .connected { margin-right: 0; font-size: 9px; }
+
+.layout { display: flex; flex-direction: column; }
+.context { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 14px 20px; border-right: 0; border-bottom: 1px solid var(--border); }
+.context > .advanced { flex: 1; min-width: 0; margin: 0; }
+.context > .actions { flex-shrink: 0; }
+.context .sectionHeading { margin: 12px 0; }
+.report { padding-top: 16px; }
+.reportDetails { margin: 10px 0; }
+.reportDetails > summary { cursor: pointer; color: var(--muted); font-size: 10px; }
+.understanding { margin: 14px 0; }
+.understanding > p { margin: 8px 0; font-size: 12px; line-height: 1.65; }
+.understanding strong, .decision strong { display: block; color: var(--muted); font-weight: 500; font-size: 10px; margin-bottom: 3px; }
+.readout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0 8px; }
+.readout > section { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--fg) 2%, transparent); }
+.readout h4, .nextHeading { font-size: 12px; font-weight: 550; margin: 0; }
+.nextHeading { margin: 16px 0 8px; }
+.insight { margin-top: 12px; }
+.insight + .insight { border-top: 1px solid var(--border); padding-top: 12px; }
+.insight h5, .decision h5 { font-size: 12px; font-weight: 550; line-height: 1.5; margin: 0 0 6px; }
+.insight p, .decision p { font-size: 12px; line-height: 1.65; margin: 6px 0; overflow-wrap: anywhere; }
+.insight small, .decision > small { display: block; color: var(--muted); text-transform: capitalize; font-size: 10px; }
+.evidence { display: flex; align-items: flex-start; gap: 8px; margin-top: 5px; }
+.evidence .reasoning { margin-top: 4px; }
+.decision { padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--fg) 2%, transparent); margin: 8px 0; }
+.decision h5 { margin-top: 7px; }
+.pieces { margin: 18px 0 10px; }
+.pieces > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.pieces button { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 16px; background: color-mix(in srgb, var(--fg) 2%, transparent); text-align: left; color: var(--fg); cursor: pointer; }
+.pieces .time { display: flex; align-items: center; justify-content: space-between; }
+.pieces strong { display: block; font-size: 11px; font-weight: 550; line-height: 1.5; margin: 8px 0 4px; }
+.pieces button p { font-size: 10px; line-height: 1.6; color: var(--muted); margin: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+@media (max-width: 1000px) { .pieces > div { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .readout { grid-template-columns: minmax(0, 1fr); } .context { flex-wrap: wrap; } }
+
+.reportMore { margin-left: auto; position: relative; }
+.reportMore > summary { color: var(--muted); cursor: pointer; font-size: 11px; }
+.reportMore > .exports { position: absolute; z-index: 3; right: 0; top: 100%; display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: min(360px, calc(100vw - 64px)); max-height: 70vh; overflow-y: auto; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); box-shadow: 0 12px 30px #0002; }
+.pieces > .textButton { padding: 4px 0; margin-top: 6px; background: transparent; border: 0; border-radius: 0; }
+
+.goal strong { display: flex; align-items: baseline; gap: 8px; }
+.goal small { color: var(--muted); font-size: 10px; font-weight: 400; }
+.exploreJourney { margin: 12px 0; }
+.exploreJourney > summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.stages { margin: 12px 0; padding-left: 20px; }
+.stages li { padding: 7px 0; }
+.stages h5 { font-size: 12px; font-weight: 550; margin: 0; }
+.stages p, .journeyOutcome { font-size: 12px; line-height: 1.65; margin: 5px 0; color: var(--muted); }
+.journeyOutcome strong { display: block; font-size: 10px; font-weight: 500; }

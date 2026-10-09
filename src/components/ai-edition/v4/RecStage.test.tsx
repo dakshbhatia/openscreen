@@ -137,6 +137,29 @@ async function tooltipOn(control: HTMLElement) {
 }
 
 describe("RecStage controls", () => {
+	it("keeps research capture focused on source and start, with advanced options hidden", async () => {
+		stubRecordingPrefs({ camEnabled: true, micEnabled: true });
+		render(
+			<TooltipProvider>
+				<RecStage compact onStartRecording={vi.fn()} />
+			</TooltipProvider>,
+		);
+		await waitFor(() =>
+			expect(screen.getByText(/Recording options.*Camera on/)).toBeInTheDocument(),
+		);
+		expect(screen.getByRole("button", { name: "rec.startRecording" })).toBeVisible();
+		expect(screen.queryByRole("button", { name: "rec.camera" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "rec.autoZoom" })).not.toBeInTheDocument();
+		expect(cameraPreview.call).toHaveBeenLastCalledWith(
+			expect.objectContaining({ enabled: false }),
+		);
+		const summary = screen.getByText(/Recording options/);
+		(summary.parentElement as HTMLDetailsElement).open = true;
+		fireEvent(summary.parentElement!, new Event("toggle"));
+		await waitFor(() => expect(screen.getByRole("button", { name: "rec.camera" })).toBeVisible());
+		expect(cameraPreview.call).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: true }));
+	});
+
 	beforeEach(() => {
 		vi.clearAllMocks();
 		recordingPrefsListeners = [];

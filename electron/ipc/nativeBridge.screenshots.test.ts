@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
 	analyze: vi.fn(),
 	cancel: vi.fn(),
 	organize: vi.fn(),
+	capture: vi.fn(),
+	access: vi.fn(),
+	requestAccess: vi.fn(),
+	openSettings: vi.fn(),
 	owner: { isDestroyed: () => false },
 }));
 vi.mock("electron", () => ({
@@ -21,6 +25,15 @@ vi.mock("electron", () => ({
 	shell: { openPath: mocks.openPath },
 }));
 vi.mock("../messageBox", () => ({ showOpenDialogOver: mocks.pick }));
+vi.mock("../ai-edition/screenshot-capture", () => ({
+	ScreenshotCapture: class {
+		capture = mocks.capture;
+		access = mocks.access;
+	},
+}));
+vi.mock("../permissions", () => ({
+	getMacPermissions: () => ({ request: mocks.requestAccess, openSettings: mocks.openSettings }),
+}));
 vi.mock("../ai-edition/screenshot-intel-service", () => ({
 	ScreenshotIntelService: class {
 		import = mocks.import;
@@ -54,6 +67,27 @@ beforeEach(() => {
 });
 
 describe("screenshot native bridge", () => {
+	it("checks access without prompting, and opens only the screen permission on explicit request", async () => {
+		mocks.access.mockResolvedValue({ status: "denied" });
+		expect(await invoke("screenshots.captureAccess")).toMatchObject({
+			ok: true,
+			data: { status: "denied" },
+		});
+		expect(mocks.requestAccess).not.toHaveBeenCalled();
+		expect(await invoke("screenshots.openCaptureSettings", { kind: "camera" })).toMatchObject({
+			ok: true,
+		});
+		expect(mocks.requestAccess).toHaveBeenCalledWith("screen");
+		expect(mocks.openSettings).toHaveBeenCalledWith("screen");
+	});
+	it("routes interactive capture through the requesting window and managed capture service", async () => {
+		mocks.capture.mockResolvedValue({ id: "batch_capture" });
+		expect(await invoke("screenshots.capture")).toMatchObject({
+			ok: true,
+			data: { id: "batch_capture" },
+		});
+		expect(mocks.capture).toHaveBeenCalledWith(mocks.owner, "darwin");
+	});
 	it("leaves the library untouched when the multi-image picker is cancelled", async () => {
 		mocks.pick.mockResolvedValue({ canceled: true, filePaths: [] });
 		const result = await invoke("screenshots.pick");

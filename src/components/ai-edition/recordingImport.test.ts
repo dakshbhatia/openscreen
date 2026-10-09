@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CursorTelemetryPoint } from "@/components/video-editor/types";
 import { replaceTimeline as replaceTimelineOp } from "@/lib/ai-edition/document/timeline";
-import { type AxcutDocument, createEmptyDocument } from "@/lib/ai-edition/schema";
+import { type AxcutAsset, type AxcutDocument, createEmptyDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { undo } from "@/lib/ai-edition/store/undo";
 import { clearHistory, past } from "@/lib/ai-edition/store/undoStack";
@@ -33,14 +33,23 @@ vi.mock("@/native/client", () => ({
 // Typed to the store's own action signatures rather than cast through `any`:
 // tsconfig.test.json typechecks this file in CI, so a stub that drifts from the
 // contract it stands in for should fail there instead of passing silently.
-// `createProject` returns a document because the real one does — the import path
-// discards it, but a stub that lies about the shape is a stub that stops catching
-// the day something starts reading it.
-const createProject = vi.fn(
-	async (title: string): Promise<AxcutDocument> =>
-		createEmptyDocument({ projectId: "proj_stub", title }),
-);
-const addAsset = vi.fn(async (): Promise<null> => null);
+const createProject = vi.fn(async (title: string): Promise<AxcutDocument> => {
+	const document = createEmptyDocument({ projectId: "proj_stub", title });
+	useProjectStore.setState({ projectId: document.project.id, document });
+	return document;
+});
+const addAsset = vi.fn(async (path: string, label?: string): Promise<AxcutAsset | null> => {
+	const asset: AxcutAsset = {
+		id: "asset_stub",
+		kind: "video",
+		originalPath: path,
+		label: label ?? path,
+		cameraTrack: null,
+	};
+	const document = useProjectStore.getState().document;
+	if (document) useProjectStore.setState({ document: { ...document, assets: [asset] } });
+	return asset;
+});
 const replaceTimeline = vi.fn(async () => undefined);
 
 // Read before anything stubs them: the first describe replaces these actions on the
@@ -95,6 +104,7 @@ describe("importPendingRecording", () => {
 		vi.clearAllMocks();
 		consumeFreshRecordingAutoZoomPending();
 		useProjectStore.setState({
+			projectId: null,
 			document: null,
 			createProject,
 			addAsset,
@@ -162,11 +172,18 @@ describe("importPendingRecording", () => {
 	it("seeds a placeholder clip when the imported asset has none", async () => {
 		stubElectronApi("/recordings/recording-1.webm");
 		addAsset.mockImplementationOnce(async () => {
+			const document = createEmptyDocument({ projectId: "proj_stub", title: "Recording" });
+			const asset: AxcutAsset = {
+				id: "a1",
+				kind: "video",
+				originalPath: "/recordings/recording-1.webm",
+				label: "recording-1.webm",
+				cameraTrack: null,
+			};
 			useProjectStore.setState({
-				// biome-ignore lint/suspicious/noExplicitAny: only the two fields the seed reads
-				document: { assets: [{ id: "a1" }], timeline: { clips: [] } } as any,
+				document: { ...document, assets: [asset] },
 			});
-			return null;
+			return asset;
 		});
 
 		await importPendingRecording();
@@ -176,6 +193,95 @@ describe("importPendingRecording", () => {
 			"Auto-imported recording",
 			{ history: false },
 		);
+	});
+
+	it("leaves the hand-off pending when project creation was superseded", async () => {
+		const api = stubElectronApi("/recordings/pending.webm");
+		let finish!: (document: AxcutDocument) => void;
+		createProject.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const pending = importPendingRecording();
+		await vi.waitFor(() => expect(createProject).toHaveBeenCalledOnce());
+		const other = createEmptyDocument({ projectId: "other", title: "Chosen" });
+		useProjectStore.setState({ projectId: "other", document: other });
+		finish(createEmptyDocument({ projectId: "late", title: "Recording" }));
+		await expect(pending).resolves.toBe(false);
+		expect(addAsset).not.toHaveBeenCalled();
+		expect(api.setCurrentRecordingSession).not.toHaveBeenCalled();
+		expect(replaceTimeline).not.toHaveBeenCalled();
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(false);
+		expect(useProjectStore.getState().document).toBe(other);
+	});
+
+	it("does not start a recording project after a newer selection during the session read", async () => {
+		const api = stubElectronApi("/recordings/pending.webm");
+		const response = await api.getCurrentRecordingSession();
+		let finish!: (value: typeof response) => void;
+		api.getCurrentRecordingSession.mockReturnValueOnce(
+			new Promise((resolve) => {
+				finish = resolve;
+			}),
+		);
+		const pending = importPendingRecording();
+		useProjectStore.getState().clear();
+		const other = createEmptyDocument({ projectId: "other", title: "Chosen" });
+		useProjectStore.setState({ projectId: "other", document: other });
+		finish(response);
+		await expect(pending).resolves.toBe(false);
+		expect(createProject).not.toHaveBeenCalled();
+		expect(api.setCurrentRecordingSession).not.toHaveBeenCalled();
+		expect(useProjectStore.getState().document).toBe(other);
+	});
+
+	it.each([
+		false,
+		true,
+	])("keeps the hand-off and other document intact when asset import is superseded (asset returned: %s)", async (returnsAsset) => {
+		const api = stubElectronApi("/recordings/pending.webm");
+		let finish!: (asset: AxcutAsset | null) => void;
+		addAsset.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const pending = importPendingRecording();
+		await vi.waitFor(() => expect(addAsset).toHaveBeenCalledOnce());
+		const other = createEmptyDocument({ projectId: "other", title: "Chosen" });
+		useProjectStore.setState({ projectId: "other", document: other });
+		finish(
+			returnsAsset
+				? {
+						id: "asset_late",
+						kind: "video",
+						label: "pending.webm",
+						originalPath: "/recordings/pending.webm",
+						cameraTrack: null,
+					}
+				: null,
+		);
+		await expect(pending).resolves.toBe(false);
+		expect(api.setCurrentRecordingSession).not.toHaveBeenCalled();
+		expect(replaceTimeline).not.toHaveBeenCalled();
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(false);
+		expect(useProjectStore.getState().document).toBe(other);
+	});
+
+	it("does not seed or mark a different project selected while the owned hand-off is consumed", async () => {
+		const api = stubElectronApi("/recordings/pending.webm");
+		const other = createEmptyDocument({ projectId: "other", title: "Chosen" });
+		api.setCurrentRecordingSession.mockImplementationOnce(async () => {
+			useProjectStore.setState({ projectId: "other", document: other });
+			return { success: true };
+		});
+		await expect(importPendingRecording()).resolves.toBe(false);
+		expect(replaceTimeline).not.toHaveBeenCalled();
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(false);
+		expect(useProjectStore.getState().document).toBe(other);
 	});
 });
 

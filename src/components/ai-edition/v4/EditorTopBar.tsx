@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import logoMark from "@/assets/openscreen-mark.png";
+import productIntelMark from "@/assets/product-intel-mark.svg";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
@@ -86,7 +87,18 @@ export function EditorTopBar({
 	if (mode === "research") {
 		return (
 			<header className={`${styles.topbar} ${research.topbar}`}>
-				<span className={research.wordmark}>Product intel</span>
+				<span className={research.wordmark}>
+					<img
+						className={research.brandMark}
+						src={productIntelMark}
+						alt=""
+						aria-hidden="true"
+						width={26}
+						height={26}
+						draggable={false}
+					/>
+					Product intel
+				</span>
 				<details
 					className={research.moreMenu}
 					open={moreOpen}
@@ -109,7 +121,7 @@ export function EditorTopBar({
 							className={research.secondaryButton}
 							onClick={actions.openProject}
 						>
-							<FolderOpen size={14} aria-hidden /> Open project
+							<FolderOpen size={14} aria-hidden /> Recording projects
 						</button>
 						<button
 							type="button"

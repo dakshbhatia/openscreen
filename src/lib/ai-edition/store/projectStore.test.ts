@@ -118,6 +118,84 @@ describe("useProjectStore", () => {
 		expect(state.error).toBe("not found");
 	});
 
+	it.each([
+		"load",
+		"create",
+	] as const)("a late %s cannot replace a newer project or its undo history", async (kind) => {
+		let finish!: (result: { success: boolean; document: typeof sampleDoc }) => void;
+		const delayed = new Promise<{ success: boolean; document: typeof sampleDoc }>((resolve) => {
+			finish = resolve;
+		});
+		const other = { ...sampleDoc, project: { ...sampleDoc.project, id: "proj_chosen" } };
+		const first = kind === "load" ? bridgeMocks.get : bridgeMocks.create;
+		first.mockReturnValueOnce(delayed);
+		const pending =
+			kind === "load"
+				? useProjectStore.getState().loadProject(sampleDoc.project.id)
+				: useProjectStore.getState().createProject("Late");
+		if (kind === "load") {
+			bridgeMocks.create.mockResolvedValueOnce({ success: true, document: other });
+			await useProjectStore.getState().createProject("Chosen");
+		} else {
+			bridgeMocks.get.mockResolvedValueOnce({ success: true, document: other });
+			await useProjectStore.getState().loadProject(other.project.id);
+		}
+		pushHistory({ projectId: other.project.id, doc: structuredClone(other) });
+		const chosen = useProjectStore.getState();
+		finish({ success: true, document: sampleDoc });
+		await pending;
+		expect(useProjectStore.getState()).toEqual(chosen);
+		expect(past).toHaveLength(1);
+		expect(past[0].projectId).toBe(other.project.id);
+	});
+
+	it.each(["load", "create"] as const)("clear supersedes an in-flight %s", async (kind) => {
+		let finish!: (result: { success: boolean; document: typeof sampleDoc }) => void;
+		const first = kind === "load" ? bridgeMocks.get : bridgeMocks.create;
+		first.mockReturnValueOnce(
+			new Promise((resolve) => {
+				finish = resolve;
+			}),
+		);
+		const pending =
+			kind === "load"
+				? useProjectStore.getState().loadProject(sampleDoc.project.id)
+				: useProjectStore.getState().createProject("Late");
+		useProjectStore.getState().clear();
+		const cleared = useProjectStore.getState();
+		finish({ success: true, document: sampleDoc });
+		await pending;
+		expect(useProjectStore.getState()).toEqual(cleared);
+		expect(past).toHaveLength(0);
+	});
+
+	it.each([
+		"load",
+		"create",
+	] as const)("a stale %s error cannot replace a newer transition's status", async (kind) => {
+		let fail!: (error: Error) => void;
+		const first = kind === "load" ? bridgeMocks.get : bridgeMocks.create;
+		first.mockReturnValueOnce(
+			new Promise((_resolve, reject) => {
+				fail = reject;
+			}),
+		);
+		const pending =
+			kind === "load"
+				? useProjectStore.getState().loadProject("proj_old")
+				: useProjectStore.getState().createProject("Late");
+		// Observe the create rejection before releasing it; stale failures still
+		// reach their initiating caller without touching the current workspace.
+		const observed = pending.catch((error: unknown) => error);
+		bridgeMocks.get.mockResolvedValueOnce({ success: false, error: "Chosen project unavailable" });
+		await useProjectStore.getState().loadProject("proj_chosen");
+		const chosen = useProjectStore.getState();
+		fail(new Error("Old request failed"));
+		await observed;
+		expect(useProjectStore.getState()).toEqual(chosen);
+		expect(useProjectStore.getState().error).toBe("Chosen project unavailable");
+	});
+
 	it("addAsset replaces the document and bumps revision", async () => {
 		useProjectStore.setState({
 			projectId: "proj_test",

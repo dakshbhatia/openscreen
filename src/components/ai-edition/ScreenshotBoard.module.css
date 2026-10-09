@@ -139,3 +139,23 @@
 .readout + .textButton { margin: -10px 0 14px; }
 @media (max-width: 1000px) { .groupOverview > div { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 440px) { .groupOverview > div { grid-template-columns: minmax(0, 1fr); } }
+
+.captureAccess { margin: 14px 0; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--fg) 2%, transparent); }
+.captureAccess h3 { font-size: 12px; font-weight: 550; margin: 0 0 6px; }
+.captureAccess p { font-size: 11px; line-height: 1.65; color: var(--muted); margin: 6px 0 10px; max-width: 75ch; }
+.captureAccess p[role="alert"] { color: #d75b47; }
+.captureAccess > div { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.advice { grid-template-columns: minmax(0, 1fr); }
+
+.researchGoal { margin-top: 10px; }
+.board .researchGoal[hidden] { display: none; }
+.journey { margin: 10px 0 16px; }
+.journeyGoal { margin: 0 0 4px; max-width: 90ch; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.journeyGoal > strong, .journeyOutcome > strong { display: block; color: var(--muted); font-size: 10px; font-weight: 500; margin-bottom: 2px; }
+.journeyGoal > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.journeyOutcome { margin: 10px 0; font-size: 11px; line-height: 1.65; overflow-wrap: anywhere; }
+.journeyPieces { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.journeyPieces > article { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--fg) 2%, transparent); }
+.journeyPieces h4 { margin: 0 0 5px; font-size: 11px; font-weight: 550; }
+.journeyPieces p { margin: 0 0 8px; font-size: 11px; line-height: 1.65; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .journeyPieces { grid-template-columns: minmax(0, 1fr); } }

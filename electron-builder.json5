@@ -194,7 +194,7 @@
         "arch": ["x64", "arm64"]
       }
     ],
-    "icon": "icons/icons/mac/icon.icns",
+    "icon": "build/product-intel/icon.icns",
     "artifactName": "${productName}-Mac-${arch}-${version}-Installer.${ext}",
     "extraResources": [
       {
@@ -204,10 +204,10 @@
       }
     ],
     "extendInfo": {
-      "NSAudioCaptureUsageDescription": "OpenScreen needs audio capture permission to record system audio.",
-      "NSMicrophoneUsageDescription": "OpenScreen needs microphone access to record voice audio.",
-      "NSCameraUsageDescription": "OpenScreen needs camera access to record webcam video.",
-      "NSScreenCaptureUsageDescription": "OpenScreen needs screen recording permission to detect and capture windows.",
+      "NSAudioCaptureUsageDescription": "Product Intel uses system audio when you choose to include it in a recording.",
+      "NSMicrophoneUsageDescription": "Product Intel uses your microphone when you choose to add voice to a recording.",
+      "NSCameraUsageDescription": "Product Intel uses your camera when you choose to include webcam video in a recording.",
+      "NSScreenCaptureUsageDescription": "Product Intel captures screenshots and records product flows from your screen.",
       "NSCameraUseContinuityCameraDeviceType": true
     }
   },
@@ -223,7 +223,7 @@
       "pacman",
       "rpm"
     ],
-    "icon": "icons/icons/png",
+    "icon": "build/product-intel/png",
     "artifactName": "${productName}-Linux-${version}.${ext}",
     "maintainer": "Etienne Lescot <etiennelescot@gmail.com>",
     "category": "AudioVideo",
@@ -400,7 +400,7 @@
     "target": [
       "nsis"
     ],
-    "icon": "icons/icons/win/icon.ico",
+    "icon": "build/product-intel/icon.ico",
     "artifactName": "${productName}.Setup.${version}.${ext}",
     "extraResources": [
       {

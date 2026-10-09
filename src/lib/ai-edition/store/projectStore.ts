@@ -12,6 +12,12 @@ import { clearHistory, currentWriteEpoch, pushHistory } from "./undoStack";
 
 let documentSavesInFlight = 0;
 const documentSavesIdle: Array<() => void> = [];
+let projectTransition = 0;
+
+/** Detect workspace selections made while a startup or import request was pending. */
+export function getProjectTransitionVersion(): number {
+	return projectTransition;
+}
 
 /** Outcome of `waitForDocumentSaves`: saves drained, or the wait gave up. */
 export type DocumentSavesWait = "idle" | "timeout";
@@ -279,9 +285,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	lastSavedAt: null,
 
 	async loadProject(projectId) {
+		const transition = ++projectTransition;
 		set({ status: "loading", error: null });
 		try {
 			const result = await nativeBridgeClient.aiEdition.get(projectId);
+			if (transition !== projectTransition) return;
 			if (!result.success || !result.document) {
 				throw new Error(result.error ?? "Failed to load project");
 			}
@@ -298,6 +306,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 			});
 			clearHistory();
 		} catch (error) {
+			if (transition !== projectTransition) return;
 			set({
 				status: "error",
 				error: error instanceof Error ? error.message : String(error),
@@ -306,6 +315,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	},
 
 	async createProject(title) {
+		const transition = ++projectTransition;
 		set({ status: "loading", error: null });
 		try {
 			const result = await nativeBridgeClient.aiEdition.create(title);
@@ -313,6 +323,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 				throw new Error(result.error ?? "Failed to create project");
 			}
 			const document = parseDocument(result.document);
+			// The file was created, but a later selection owns the workspace now.
+			// Return its identity so callers can refuse superseded follow-up imports.
+			if (transition !== projectTransition) return document;
 			set({
 				projectId: document.project.id,
 				document,
@@ -325,10 +338,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 			clearHistory();
 			return document;
 		} catch (error) {
-			set({
-				status: "error",
-				error: error instanceof Error ? error.message : String(error),
-			});
+			if (transition === projectTransition) {
+				set({
+					status: "error",
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
 			throw error;
 		}
 	},
@@ -639,6 +654,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	},
 
 	clear() {
+		projectTransition++;
 		// The epoch bump inside `clearHistory` is the load-bearing half, not the stack
 		// drop. `clear()`'s one production caller deletes the project that is open
 		// (`NewEditorShell`), and a background save issued a moment earlier -- a

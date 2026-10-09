@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_INTEL_SETTINGS } from "../../src/lib/product-intel";
+import { DEFAULT_INTEL_SETTINGS, PRODUCT_RECORDING_BRIEF_RULES } from "../../src/lib/product-intel";
 import { PRODUCT_REASONING_RULES } from "../../src/lib/product-reasoning";
 import { ProductIntelService } from "./product-intel-service";
 
@@ -12,6 +12,50 @@ const analysis = {
 	steps: [{ timeSec: 1, action: "Create workspace", evidence: "A form opens" }],
 	findings: [],
 	unknowns: ["No revenue data"],
+	journey: {
+		goal: "Create a workspace",
+		goalBasis: "inferred",
+		outcome: "The form is visible; completion is not shown.",
+		coverage: "partial",
+		stages: [{ name: "Setup", purpose: "Name shared work.", evidenceTimesSec: [1] }],
+	},
+	understanding: {
+		product: "A team workspace",
+		audience: "Unknown",
+		job: "Organize shared projects",
+		confidence: "low",
+	},
+	readout: {
+		strengths: [
+			{
+				title: "A recognizable workspace",
+				reason: "Naming may help users identify shared projects.",
+				basis: "inferred",
+				confidence: "medium",
+				evidenceTimesSec: [1],
+			},
+		],
+		frictions: [],
+	},
+	decisions: [
+		{
+			title: "Test deferred naming",
+			recommendation: "investigate",
+			rationale: "Naming precedes useful work.",
+			counterEvidence: "Naming may support orientation.",
+			experiment: "Observe whether users can identify their project after skipping naming.",
+			tradeoff: "Deferral may reduce orientation.",
+			confidence: "low",
+			evidenceTimesSec: [1],
+		},
+	],
+	pieces: [
+		{
+			name: "Onboarding",
+			purpose: "The workspace form gives shared projects a recognizable home.",
+			timeSec: 1,
+		},
+	],
 };
 let root: string;
 let media: string;
@@ -31,7 +75,7 @@ function service(apiKey: string | null = "test-key", fetcher: typeof fetch = vi.
 	return new ProductIntelService(root, loadSource, () => apiKey, fetcher);
 }
 
-function google() {
+function google(transform: (value: typeof analysis) => unknown = (value) => value) {
 	const requests: { url: string; init?: RequestInit }[] = [];
 	const fetcher: typeof fetch = async (input, init) => {
 		const url = String(input);
@@ -52,7 +96,7 @@ function google() {
 			});
 		if (init?.method === "DELETE") return new Response(null, { status: 200 });
 		return Response.json({
-			candidates: [{ content: { parts: [{ text: JSON.stringify(analysis) }] } }],
+			candidates: [{ content: { parts: [{ text: JSON.stringify(transform(analysis)) }] } }],
 		});
 	};
 	return { fetcher, requests };
@@ -141,6 +185,7 @@ describe("ProductIntelService", () => {
 		await intel.saveSettings({
 			...DEFAULT_INTEL_SETTINGS,
 			productBrief: "A tool for small studios",
+			researchGoal: " Why is setup needed?!\nKeep this. ",
 		});
 		const report = await intel.analyze("proj_1");
 		expect(report.analysis.summary).toBe("Workspace setup");
@@ -149,8 +194,20 @@ describe("ProductIntelService", () => {
 			String(requests.find((r) => r.url.includes(":generateContent"))?.init?.body),
 		);
 		expect(body.contents[0].parts[1].text).toContain("A tool for small studios");
+		expect(body.contents[0].parts[1].text).toContain(
+			JSON.stringify(" Why is setup needed?!\nKeep this. "),
+		);
 		expect(body.contents[0].parts[0].fileData.fileUri).toContain("files/123");
-		expect(JSON.stringify(body.generationConfig.responseJsonSchema)).not.toContain("maxItems");
+		expect(JSON.stringify(body.generationConfig.responseJsonSchema)).not.toMatch(
+			/minItems|maxItems/,
+		);
+		expect(body.generationConfig.responseJsonSchema.required).toEqual(
+			expect.arrayContaining(["understanding", "readout", "decisions", "pieces", "journey"]),
+		);
+		expect(report.analysis.understanding?.job).toBe("Organize shared projects");
+		expect(report.analysis.readout?.strengths[0].evidenceTimesSec).toEqual([1]);
+		expect(report.analysis.decisions?.[0].recommendation).toBe("investigate");
+		expect(report.analysis.pieces?.[0].purpose).toContain("recognizable home");
 		expect(requests.at(-1)?.init?.method).toBe("DELETE");
 		expect(JSON.stringify(report)).not.toContain("test-key");
 	});
@@ -165,7 +222,9 @@ describe("ProductIntelService", () => {
 			systemInstruction: { parts: { text: string }[] };
 			tools?: unknown;
 		};
-		expect(body.systemInstruction.parts[0].text).toBe(`${prompt}\n\n${PRODUCT_REASONING_RULES}`);
+		expect(body.systemInstruction.parts[0].text).toBe(
+			`${prompt}\n\n${PRODUCT_REASONING_RULES}\n\n${PRODUCT_RECORDING_BRIEF_RULES}`,
+		);
 		expect(body.systemInstruction.parts[0].text).toContain(
 			"Successfully retrieved company content supplies product context even without a written brief",
 		);
@@ -254,6 +313,90 @@ describe("ProductIntelService", () => {
 		expect(await intel.getReport("proj_1")).toBeNull();
 		expect(base.requests.at(-1)?.init?.method).toBe("DELETE");
 	});
+	it.each([
+		"understanding",
+		"readout",
+		"decisions",
+		"pieces",
+		"journey",
+	] as const)("requires %s on new API replies while preserving the old report on rejection", async (field) => {
+		let invalid = false;
+		const base = google((value) => {
+			if (!invalid) return value;
+			const legacy: Partial<typeof analysis> = { ...value };
+			delete legacy[field];
+			return legacy;
+		});
+		const intel = service("key", base.fetcher);
+		const previous = await intel.analyze("proj_1");
+		invalid = true;
+		await expect(intel.analyze("proj_1")).rejects.toThrow();
+		expect(await intel.getReport("proj_1")).toEqual(previous);
+		expect(base.requests.at(-1)?.init?.method).toBe("DELETE");
+	});
+	it.each([
+		"piece",
+		"strength",
+		"friction",
+		"decision",
+		"journey",
+	])("rejects out-of-duration %s evidence and cleans up the upload", async (kind) => {
+		const base = google((value) => ({
+			...value,
+			pieces: kind === "piece" ? [{ ...value.pieces[0], timeSec: 10.01 }] : value.pieces,
+			readout:
+				kind === "strength"
+					? {
+							...value.readout,
+							strengths: [{ ...value.readout.strengths[0], evidenceTimesSec: [11] }],
+						}
+					: kind === "friction"
+						? {
+								...value.readout,
+								frictions: [{ ...value.readout.strengths[0], evidenceTimesSec: [11] }],
+							}
+						: value.readout,
+			decisions:
+				kind === "decision" ? [{ ...value.decisions[0], evidenceTimesSec: [11] }] : value.decisions,
+			journey:
+				kind === "journey"
+					? { ...value.journey, stages: [{ ...value.journey.stages[0], evidenceTimesSec: [11] }] }
+					: value.journey,
+		}));
+		const intel = service("key", base.fetcher);
+		await expect(intel.analyze("proj_1")).rejects.toThrow(/timestamp outside/i);
+		expect(await intel.getReport("proj_1")).toBeNull();
+		expect(base.requests.at(-1)?.init?.method).toBe("DELETE");
+	});
+	it("loads a legacy report without requiring migration or network calls", async () => {
+		const {
+			understanding: _understanding,
+			readout: _readout,
+			decisions: _decisions,
+			pieces: _pieces,
+			journey: _journey,
+			...legacy
+		} = analysis;
+		await fs.mkdir(path.join(root, "product-intel"));
+		await fs.writeFile(
+			path.join(root, "product-intel", "proj_1.json"),
+			JSON.stringify({
+				projectId: "proj_1",
+				assetId: "asset_1",
+				createdAt: "2026-10-08T00:00:00Z",
+				sourceFingerprint: "old",
+				durationSec: 10,
+				settings: DEFAULT_INTEL_SETTINGS,
+				analysis: legacy,
+				remoteFileDeleted: true,
+			}),
+		);
+		const fetcher = vi.fn<typeof fetch>();
+		const saved = await service("key", fetcher).snapshot("proj_1");
+		expect(saved.report?.analysis).toEqual(legacy);
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+
 	it("reuses a matching report for auto analysis and refreshes after the brief changes", async () => {
 		const { fetcher, requests } = google();
 		const intel = service("test-key", fetcher);
@@ -267,6 +410,20 @@ describe("ProductIntelService", () => {
 	});
 	it("blocks project traversal before reading or writing reports", async () => {
 		await expect(service().getReport("../secret")).rejects.toThrow(/project/i);
+	});
+	it("refreshes cached evidence after only the research goal changes, preserving its wording", async () => {
+		const { fetcher, requests } = google();
+		const intel = service("test-key", fetcher);
+		await intel.analyze("proj_1");
+		const count = requests.length;
+		const researchGoal = "  Why does setup exist?!\nDon't rewrite me.  ";
+		await intel.saveSettings({ ...DEFAULT_INTEL_SETTINGS, researchGoal });
+		const updated = await intel.analyze("proj_1", true);
+		expect(requests.length).toBeGreaterThan(count);
+		expect(updated.settings.researchGoal).toBe(researchGoal);
+		const generated = requests.filter((request) => request.url.includes(":generateContent")).at(-1);
+		const body = JSON.parse(String(generated?.init?.body));
+		expect(body.contents[0].parts[1].text).toContain(JSON.stringify(researchGoal));
 	});
 	it("refreshes cached evidence when the measured source duration changes", async () => {
 		const { fetcher, requests } = google();

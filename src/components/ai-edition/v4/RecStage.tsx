@@ -74,11 +74,14 @@ function normalizedRecordingPrefs(prefs: Partial<RecordingPrefsState>): Recordin
 export function RecStage({
 	onStartRecording,
 	onClose,
+	compact = false,
 }: {
 	onStartRecording: () => void;
 	onClose?: () => void;
+	compact?: boolean;
 }) {
 	const t = useScopedT("editor");
+	const [optionsOpen, setOptionsOpen] = useState(false);
 	const [prefs, setPrefsState] = useState<RecordingPrefsState>(DEFAULT_PREFS);
 	// Bumped by every local change and every pushed snapshot, so the re-read after a
 	// failed write can tell that something newer has landed since.
@@ -134,12 +137,12 @@ export function RecStage({
 	};
 
 	const micDevices = useMicrophoneDevices(
-		prefs.micEnabled,
+		prefs.micEnabled && (!compact || optionsOpen),
 		prefs.micDeviceId ?? undefined,
 		prefs.micDeviceName ?? undefined,
 	);
 	const camDevices = useCameraDevices(
-		true,
+		!compact || optionsOpen,
 		prefs.camDeviceId ?? undefined,
 		prefs.camDeviceName ?? undefined,
 	);
@@ -161,14 +164,18 @@ export function RecStage({
 	// Live proof the selected devices actually work — a level meter for mic,
 	// a real <video> feed for camera — instead of just toggling a pref flag.
 	const { level: micLevel } = useAudioLevelMeter({
-		enabled: prefs.micEnabled && micDevices.isReady && micDevices.devices.length > 0,
+		enabled:
+			(!compact || optionsOpen) &&
+			prefs.micEnabled &&
+			micDevices.isReady &&
+			micDevices.devices.length > 0,
 		deviceId:
 			micDevices.selectedDeviceId && micDevices.selectedDeviceId !== "default"
 				? micDevices.selectedDeviceId
 				: undefined,
 	});
 	const { stream: cameraStream, error: cameraError } = useCameraPreviewStream({
-		enabled: prefs.camEnabled,
+		enabled: prefs.camEnabled && (!compact || optionsOpen),
 		deviceId: camDevices.selectedDeviceId || undefined,
 	});
 	const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -271,9 +278,9 @@ export function RecStage({
 		: (source?.name ?? t("rec.selectSource"));
 
 	return (
-		<div className={styles.recStage}>
+		<div className={`${styles.recStage}${compact ? ` ${styles.recCompact}` : ""}`}>
 			<div className={styles.recCols}>
-				<div className={styles.recPreviewCol}>
+				<div className={styles.recPreviewCol} hidden={compact && !optionsOpen}>
 					<div className={styles.recPreviewFrame}>
 						{prefs.camEnabled ? (
 							cameraStream ? (
@@ -299,7 +306,9 @@ export function RecStage({
 							<div className={styles.recPreviewPlaceholder}>
 								<MonitorSmartphone size={28} />
 								<span>{sourceLabel}</span>
-								<span className={styles.recPreviewHint}>{t("rec.turnOnCameraHint")}</span>
+								{!compact ? (
+									<span className={styles.recPreviewHint}>{t("rec.turnOnCameraHint")}</span>
+								) : null}
 							</div>
 						)}
 						<div className={styles.recBadge}>
@@ -351,200 +360,219 @@ export function RecStage({
 						</div>
 					)}
 
-					<div className={styles.recRow}>
-						<div id={rowLabelId("systemAudio")} className={styles.recRowLabel}>
-							{prefs.systemAudioEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
-							{t("rec.systemAudio")}
-						</div>
-						{/* "System audio" is jargon for what the computer plays: the one row whose label
+					<details
+						className={styles.recOptions}
+						open={!compact || optionsOpen}
+						onToggle={(event) => {
+							if (compact) setOptionsOpen(event.currentTarget.open);
+						}}
+					>
+						{compact ? (
+							<summary>
+								Recording options{prefs.micEnabled ? " · Microphone on" : ""}
+								{prefs.camEnabled ? " · Camera on" : ""}
+								{prefs.systemAudioEnabled ? " · Audio on" : ""}
+							</summary>
+						) : null}
+						<div hidden={compact && !optionsOpen}>
+							<div className={styles.recRow}>
+								<div id={rowLabelId("systemAudio")} className={styles.recRowLabel}>
+									{prefs.systemAudioEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
+									{t("rec.systemAudio")}
+								</div>
+								{/* "System audio" is jargon for what the computer plays: the one row whose label
 						    alone does not say what it records. The row tooltips open above their pill: to
 						    the left they would sit on the label being read, and below the last row they
 						    would cover Start recording. */}
-						<Tooltip content={t("rec.systemAudioTip")} side="top">
-							<button
-								type="button"
-								className={`${styles.recToggleBtn}${prefs.systemAudioEnabled ? ` ${styles.on}` : ""}`}
-								aria-labelledby={rowLabelId("systemAudio")}
-								aria-pressed={prefs.systemAudioEnabled}
-								onClick={() => updatePrefs({ systemAudioEnabled: !prefs.systemAudioEnabled })}
-							>
-								{prefs.systemAudioEnabled ? t("rec.on") : t("rec.off")}
-							</button>
-						</Tooltip>
-					</div>
-
-					{canRecordMicrophone() ? (
-						<div className={styles.recRow}>
-							<div id={rowLabelId("microphone")} className={styles.recRowLabel}>
-								{prefs.micEnabled ? <MicOn size={15} /> : <MicOff size={15} />}
-								{t("rec.microphone")}
-							</div>
-							<div className={styles.recRowControl}>
-								{prefs.micEnabled ? (
-									micDevices.isLoading || !micDevices.isReady ? (
-										<span className={styles.recRowMuted}>
-											<Loader2 size={13} className="animate-spin" />
-											{t("rec.loading")}
-										</span>
-									) : micDevices.error ? (
-										<span className={styles.recRowMuted} title={micDevices.error}>
-											{t("rec.microphoneUnavailable")}
-										</span>
-									) : micDevices.devices.length === 0 ? (
-										<span className={styles.recRowMuted}>{t("rec.noMicrophoneFound")}</span>
-									) : (
-										<select
-											className={styles.recSelect}
-											value={micDevices.selectedDeviceId}
-											onChange={(e) => {
-												const deviceId = e.target.value;
-												micDevices.setSelectedDeviceId(deviceId);
-												// The label travels with the id: the native Windows
-												// helper selects a microphone by NAME, and records the
-												// Windows default endpoint when it is missing.
-												updatePrefs({
-													micDeviceId: deviceId,
-													micDeviceName:
-														micDevices.devices.find((d) => d.deviceId === deviceId)?.label ?? null,
-												});
-											}}
-										>
-											{micDevices.devices.map((d) => (
-												<option key={d.deviceId} value={d.deviceId}>
-													{d.label}
-												</option>
-											))}
-										</select>
-									)
-								) : null}
-								<button
-									type="button"
-									className={`${styles.recToggleBtn}${prefs.micEnabled ? ` ${styles.on}` : ""}`}
-									aria-labelledby={rowLabelId("microphone")}
-									aria-pressed={prefs.micEnabled}
-									onClick={() => updatePrefs({ micEnabled: !prefs.micEnabled })}
-								>
-									{prefs.micEnabled ? t("rec.on") : t("rec.off")}
-								</button>
-							</div>
-						</div>
-					) : null}
-
-					<div className={styles.recRow}>
-						<div id={rowLabelId("camera")} className={styles.recRowLabel}>
-							{prefs.camEnabled ? <Camera size={15} /> : <CameraOff size={15} />}
-							{t("rec.camera")}
-						</div>
-						<div className={styles.recRowControl}>
-							{prefs.camEnabled ? (
-								camDevices.isLoading ? (
-									<span className={styles.recRowMuted}>
-										<Loader2 size={13} className="animate-spin" />
-										{t("rec.loading")}
-									</span>
-								) : camDevices.devices.length === 0 ? (
-									<span className={styles.recRowMuted}>{t("rec.noCameraFound")}</span>
-								) : (
-									<select
-										className={styles.recSelect}
-										value={camDevices.selectedDeviceId}
-										onChange={(e) => {
-											const deviceId = e.target.value;
-											camDevices.setSelectedDeviceId(deviceId);
-											updatePrefs({
-												camDeviceId: deviceId,
-												camDeviceName:
-													camDevices.devices.find((d) => d.deviceId === deviceId)?.label ?? null,
-											});
-										}}
+								<Tooltip content={t("rec.systemAudioTip")} side="top">
+									<button
+										type="button"
+										className={`${styles.recToggleBtn}${prefs.systemAudioEnabled ? ` ${styles.on}` : ""}`}
+										aria-labelledby={rowLabelId("systemAudio")}
+										aria-pressed={prefs.systemAudioEnabled}
+										onClick={() => updatePrefs({ systemAudioEnabled: !prefs.systemAudioEnabled })}
 									>
-										{camDevices.devices.map((d) => (
-											<option key={d.deviceId} value={d.deviceId}>
-												{d.label}
-											</option>
-										))}
-									</select>
-								)
-							) : null}
-							<button
-								type="button"
-								className={`${styles.recToggleBtn}${prefs.camEnabled ? ` ${styles.on}` : ""}`}
-								aria-labelledby={rowLabelId("camera")}
-								aria-pressed={prefs.camEnabled}
-								onClick={() => updatePrefs({ camEnabled: !prefs.camEnabled })}
-							>
-								{prefs.camEnabled ? t("rec.on") : t("rec.off")}
-							</button>
-						</div>
-					</div>
+										{prefs.systemAudioEnabled ? t("rec.on") : t("rec.off")}
+									</button>
+								</Tooltip>
+							</div>
 
-					{/* Without its native helper the browser records, and it always draws the system cursor
+							{canRecordMicrophone() ? (
+								<div className={styles.recRow}>
+									<div id={rowLabelId("microphone")} className={styles.recRowLabel}>
+										{prefs.micEnabled ? <MicOn size={15} /> : <MicOff size={15} />}
+										{t("rec.microphone")}
+									</div>
+									<div className={styles.recRowControl}>
+										{prefs.micEnabled ? (
+											micDevices.isLoading || !micDevices.isReady ? (
+												<span className={styles.recRowMuted}>
+													<Loader2 size={13} className="animate-spin" />
+													{t("rec.loading")}
+												</span>
+											) : micDevices.error ? (
+												<span className={styles.recRowMuted} title={micDevices.error}>
+													{t("rec.microphoneUnavailable")}
+												</span>
+											) : micDevices.devices.length === 0 ? (
+												<span className={styles.recRowMuted}>{t("rec.noMicrophoneFound")}</span>
+											) : (
+												<select
+													className={styles.recSelect}
+													value={micDevices.selectedDeviceId}
+													onChange={(e) => {
+														const deviceId = e.target.value;
+														micDevices.setSelectedDeviceId(deviceId);
+														// The label travels with the id: the native Windows
+														// helper selects a microphone by NAME, and records the
+														// Windows default endpoint when it is missing.
+														updatePrefs({
+															micDeviceId: deviceId,
+															micDeviceName:
+																micDevices.devices.find((d) => d.deviceId === deviceId)?.label ??
+																null,
+														});
+													}}
+												>
+													{micDevices.devices.map((d) => (
+														<option key={d.deviceId} value={d.deviceId}>
+															{d.label}
+														</option>
+													))}
+												</select>
+											)
+										) : null}
+										<button
+											type="button"
+											className={`${styles.recToggleBtn}${prefs.micEnabled ? ` ${styles.on}` : ""}`}
+											aria-labelledby={rowLabelId("microphone")}
+											aria-pressed={prefs.micEnabled}
+											onClick={() => updatePrefs({ micEnabled: !prefs.micEnabled })}
+										>
+											{prefs.micEnabled ? t("rec.on") : t("rec.off")}
+										</button>
+									</div>
+								</div>
+							) : null}
+
+							<div className={styles.recRow}>
+								<div id={rowLabelId("camera")} className={styles.recRowLabel}>
+									{prefs.camEnabled ? <Camera size={15} /> : <CameraOff size={15} />}
+									{t("rec.camera")}
+								</div>
+								<div className={styles.recRowControl}>
+									{prefs.camEnabled ? (
+										camDevices.isLoading ? (
+											<span className={styles.recRowMuted}>
+												<Loader2 size={13} className="animate-spin" />
+												{t("rec.loading")}
+											</span>
+										) : camDevices.devices.length === 0 ? (
+											<span className={styles.recRowMuted}>{t("rec.noCameraFound")}</span>
+										) : (
+											<select
+												className={styles.recSelect}
+												value={camDevices.selectedDeviceId}
+												onChange={(e) => {
+													const deviceId = e.target.value;
+													camDevices.setSelectedDeviceId(deviceId);
+													updatePrefs({
+														camDeviceId: deviceId,
+														camDeviceName:
+															camDevices.devices.find((d) => d.deviceId === deviceId)?.label ??
+															null,
+													});
+												}}
+											>
+												{camDevices.devices.map((d) => (
+													<option key={d.deviceId} value={d.deviceId}>
+														{d.label}
+													</option>
+												))}
+											</select>
+										)
+									) : null}
+									<button
+										type="button"
+										className={`${styles.recToggleBtn}${prefs.camEnabled ? ` ${styles.on}` : ""}`}
+										aria-labelledby={rowLabelId("camera")}
+										aria-pressed={prefs.camEnabled}
+										onClick={() => updatePrefs({ camEnabled: !prefs.camEnabled })}
+									>
+										{prefs.camEnabled ? t("rec.on") : t("rec.off")}
+									</button>
+								</div>
+							</div>
+
+							{/* Without its native helper the browser records, and it always draws the system cursor
 					    into the video: there is nothing to switch, so neither this row nor Auto-zoom, which
 					    reads what the editable cursor records, is shown. Same rule as the HUD's button. */}
-					{editableCursorAvailable ? (
-						<div className={styles.recRow}>
-							<div id={rowLabelId("cursor")} className={styles.recRowLabel}>
-								<MousePointer2 size={15} />
-								{t("rec.editableCursor")}
-							</div>
-							<Tooltip content={t("rec.editableCursorTip")} side="top">
-								<button
-									type="button"
-									className={`${styles.recToggleBtn}${editableCursor ? ` ${styles.on}` : ""}`}
-									aria-labelledby={rowLabelId("cursor")}
-									aria-pressed={editableCursor}
-									onClick={() =>
-										updatePrefs({
-											cursorCaptureMode: editableCursor ? "system" : "editable-overlay",
-										})
-									}
-								>
-									{editableCursor ? t("rec.on") : t("rec.off")}
-								</button>
-							</Tooltip>
-						</div>
-					) : null}
+							{editableCursorAvailable ? (
+								<div className={styles.recRow}>
+									<div id={rowLabelId("cursor")} className={styles.recRowLabel}>
+										<MousePointer2 size={15} />
+										{t("rec.editableCursor")}
+									</div>
+									<Tooltip content={t("rec.editableCursorTip")} side="top">
+										<button
+											type="button"
+											className={`${styles.recToggleBtn}${editableCursor ? ` ${styles.on}` : ""}`}
+											aria-labelledby={rowLabelId("cursor")}
+											aria-pressed={editableCursor}
+											onClick={() =>
+												updatePrefs({
+													cursorCaptureMode: editableCursor ? "system" : "editable-overlay",
+												})
+											}
+										>
+											{editableCursor ? t("rec.on") : t("rec.off")}
+										</button>
+									</Tooltip>
+								</div>
+							) : null}
 
-					{/* Auto-zoom places zooms from the cursor telemetry the editable-overlay mode
+							{/* Auto-zoom places zooms from the cursor telemetry the editable-overlay mode
 					    writes. The system cursor writes none, so the row is not offered there. */}
-					{editableCursorAvailable && editableCursor ? (
-						<div className={styles.recRow}>
-							<div id={rowLabelId("autoZoom")} className={styles.recRowLabel}>
-								<ZoomIn size={15} />
-								{t("rec.autoZoom")}
-							</div>
-							<button
-								type="button"
-								data-testid="rec-auto-zoom-button"
-								className={`${styles.recToggleBtn}${prefs.autoZoomEnabled ? ` ${styles.on}` : ""}`}
-								aria-labelledby={rowLabelId("autoZoom")}
-								aria-pressed={prefs.autoZoomEnabled}
-								onClick={() => updatePrefs({ autoZoomEnabled: !prefs.autoZoomEnabled })}
-							>
-								{prefs.autoZoomEnabled ? t("rec.on") : t("rec.off")}
-							</button>
-						</div>
-					) : null}
+							{editableCursorAvailable && editableCursor ? (
+								<div className={styles.recRow}>
+									<div id={rowLabelId("autoZoom")} className={styles.recRowLabel}>
+										<ZoomIn size={15} />
+										{t("rec.autoZoom")}
+									</div>
+									<button
+										type="button"
+										data-testid="rec-auto-zoom-button"
+										className={`${styles.recToggleBtn}${prefs.autoZoomEnabled ? ` ${styles.on}` : ""}`}
+										aria-labelledby={rowLabelId("autoZoom")}
+										aria-pressed={prefs.autoZoomEnabled}
+										onClick={() => updatePrefs({ autoZoomEnabled: !prefs.autoZoomEnabled })}
+									>
+										{prefs.autoZoomEnabled ? t("rec.on") : t("rec.off")}
+									</button>
+								</div>
+							) : null}
 
-					{desktopIconsHint ? (
-						<div className={styles.recRow}>
-							<div id={rowLabelId("hideDesktopIcons")} className={styles.recRowLabel}>
-								<LayoutGrid size={15} />
-								{t("rec.hideDesktopIcons")}
-							</div>
-							<Tooltip content={desktopIconsHint} side="top">
-								<button
-									type="button"
-									className={`${styles.recToggleBtn}${prefs.hideDesktopIcons ? ` ${styles.on}` : ""}`}
-									aria-labelledby={rowLabelId("hideDesktopIcons")}
-									aria-pressed={prefs.hideDesktopIcons}
-									onClick={() => updatePrefs({ hideDesktopIcons: !prefs.hideDesktopIcons })}
-								>
-									{prefs.hideDesktopIcons ? t("rec.on") : t("rec.off")}
-								</button>
-							</Tooltip>
+							{desktopIconsHint ? (
+								<div className={styles.recRow}>
+									<div id={rowLabelId("hideDesktopIcons")} className={styles.recRowLabel}>
+										<LayoutGrid size={15} />
+										{t("rec.hideDesktopIcons")}
+									</div>
+									<Tooltip content={desktopIconsHint} side="top">
+										<button
+											type="button"
+											className={`${styles.recToggleBtn}${prefs.hideDesktopIcons ? ` ${styles.on}` : ""}`}
+											aria-labelledby={rowLabelId("hideDesktopIcons")}
+											aria-pressed={prefs.hideDesktopIcons}
+											onClick={() => updatePrefs({ hideDesktopIcons: !prefs.hideDesktopIcons })}
+										>
+											{prefs.hideDesktopIcons ? t("rec.on") : t("rec.off")}
+										</button>
+									</Tooltip>
+								</div>
+							) : null}
 						</div>
-					) : null}
+					</details>
 				</div>
 			</div>
 
@@ -559,7 +587,9 @@ export function RecStage({
 					{t("rec.startRecording")}
 				</button>
 			</div>
-			<p className={styles.recActionsHint}>{t("rec.startRecordingHint")}</p>
+			<p className={styles.recActionsHint}>
+				{compact ? "Stop recording to return to your product brief." : t("rec.startRecordingHint")}
+			</p>
 
 			{sourceModalOpen ? (
 				<SourceModal

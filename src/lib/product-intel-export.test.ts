@@ -36,7 +36,189 @@ const report: IntelReport = {
 	},
 };
 
+const briefReport: IntelReport = {
+	...report,
+	analysis: {
+		...report.analysis,
+		understanding: {
+			product: "A project workspace",
+			audience: "Possibly small studios",
+			job: "Organize shared projects",
+			confidence: "low",
+		},
+		readout: {
+			strengths: [
+				{
+					title: "A recognizable home",
+					reason: "Naming may help studios identify shared projects.",
+					basis: "inferred",
+					confidence: "medium",
+					evidenceTimesSec: [2.25, 64.125],
+				},
+			],
+			frictions: [],
+		},
+		decisions: [
+			{
+				title: "Validate deferred naming",
+				recommendation: "investigate",
+				rationale: "Setup requests a name.",
+				counterEvidence: "Naming may help orientation.",
+				experiment: "Observe whether studios can find their project after skipping naming.",
+				tradeoff: "Deferral may make shared work harder to identify.",
+				confidence: "low",
+				evidenceTimesSec: [2.25],
+			},
+		],
+		pieces: [
+			{
+				name: "Onboarding",
+				purpose: "A workspace name gives shared projects a recognizable home.",
+				timeSec: 2.25,
+			},
+		],
+	},
+};
+
 describe("product intelligence Markdown export", () => {
+	it("exports the exact research goal and allowlisted journey with linked raw timestamps", () => {
+		const input: IntelReport = {
+			...briefReport,
+			settings: {
+				...briefReport.settings,
+				researchGoal: "  Why does setup stop here?!\nKeep this exact.  ",
+			},
+			analysis: {
+				...briefReport.analysis,
+				journey: {
+					goal: "Create a workspace",
+					goalBasis: "inferred",
+					coverage: "partial",
+					outcome: "The form appears, but the recording does not show completion.",
+					stages: [{ name: "Setup", purpose: "Name shared work.", evidenceTimesSec: [2.25, 10] }],
+				},
+			},
+		};
+		const before = JSON.stringify(input);
+		const exported = reportToExportData(input);
+		expect(exported.context.researchGoal).toBe(input.settings.researchGoal);
+		expect(exported.analysis.journey).toEqual(input.analysis.journey);
+		const markdown = reportToMarkdown(input);
+		for (const part of [
+			"### Research goal",
+			"Why does setup stop here?!",
+			"Keep this exact.",
+			"## Goal-led journey",
+			"Goal basis: inferred",
+			"Coverage: partial",
+			"Create a workspace",
+			"does not show completion",
+			"Name shared work.",
+			"[00:02 (2.25s)](#raw-source-2.25s)",
+			'<a id="raw-source-2.25s"></a>',
+			"[00:10 (10s)](#raw-source-10s)",
+			'<a id="raw-source-10s"></a>',
+		])
+			expect(markdown).toContain(part);
+		expect(JSON.stringify(input)).toBe(before);
+		expect(reportToExportData(report).analysis).not.toHaveProperty("journey");
+		expect(reportToMarkdown(report)).not.toContain("## Goal-led journey");
+	});
+	it("redacts unmistakable secrets in journey prose without exporting unlisted metadata", () => {
+		const key = `AIza${"a".repeat(35)}`;
+		const journey = {
+			goal: `Inspect ${key}`,
+			goalBasis: "unknown" as const,
+			coverage: "partial" as const,
+			outcome: "No completion shown.",
+			stages: [
+				{
+					name: "Setup",
+					purpose: "/Users/private/source.mp4",
+					evidenceTimesSec: [1],
+					privateKey: "secret-nested",
+				},
+			],
+			privateKey: "secret-journey",
+		};
+		const input = { ...report, analysis: { ...report.analysis, journey } };
+		const json = JSON.stringify(reportToExportData(input));
+		const markdown = reportToMarkdown(input);
+		for (const value of [json, markdown]) {
+			expect(value).not.toContain(key);
+			expect(value).not.toContain("/Users/private");
+			expect(value).not.toContain("secret-nested");
+			expect(value).not.toContain("secret-journey");
+			expect(value).toContain("[redacted]");
+		}
+	});
+	it("exports the complete compact product brief and raw evidence times in JSON and Markdown", () => {
+		const before = JSON.stringify(briefReport);
+		const exported = reportToExportData(briefReport);
+		for (const field of ["understanding", "readout", "decisions", "pieces"] as const)
+			expect(exported.analysis[field]).toEqual(briefReport.analysis[field]);
+		const markdown = reportToMarkdown(briefReport);
+		for (const content of [
+			"## Product understanding",
+			"A project workspace",
+			"Possibly small studios",
+			"Organize shared projects",
+			"## Strengths",
+			"A recognizable home",
+			"Naming may help studios identify shared projects.",
+			"Basis: inferred",
+			"Confidence: medium",
+			"00:02 (2.25s), 01:04 (64.125s)",
+			"## Frictions",
+			"No supported insights reported.",
+			"## Product decisions",
+			"Validate deferred naming",
+			"Recommendation: investigate",
+			"Setup requests a name.",
+			"Naming may help orientation.",
+			"Observe whether studios can find their project after skipping naming.",
+			"Deferral may make shared work harder to identify.",
+			"## Product parts and purposes",
+			"Onboarding",
+			"A workspace name gives shared projects a recognizable home.",
+		])
+			expect(markdown).toContain(content);
+		expect(JSON.stringify(briefReport)).toBe(before);
+		expect(reportToExportData(report).analysis).not.toHaveProperty("pieces");
+		expect(reportToMarkdown(report)).not.toContain("## Product understanding");
+	});
+	it("allowlists new product part metadata and redacts unmistakable secrets in new Markdown prose", () => {
+		const key = `AIza${"a".repeat(35)}`;
+		const input = {
+			...briefReport,
+			analysis: {
+				...briefReport.analysis,
+				pieces: [
+					{
+						name: "Onboarding",
+						purpose: `Visible ${key} /Users/researcher/private.png`,
+						timeSec: 2.25,
+						apiKey: "private-nested-key",
+						sourcePath: "/Users/researcher/source.mp4",
+					},
+				],
+			},
+		};
+		const exported = reportToExportData(input);
+		expect(exported.analysis.pieces?.[0]).toEqual({
+			name: "Onboarding",
+			purpose: "Visible [redacted] [redacted]",
+			timeSec: 2.25,
+		});
+		expect(JSON.stringify(exported)).not.toContain("private-nested-key");
+		expect(JSON.stringify(exported)).not.toContain("source.mp4");
+		expect(JSON.stringify(exported)).not.toContain(key);
+		expect(JSON.stringify(exported)).not.toContain("/Users/researcher");
+		const markdown = reportToMarkdown(input);
+		expect(markdown).toContain("Visible [redacted] [redacted]");
+		expect(markdown).not.toContain(key);
+	});
+
 	it("uses retrieved company context when the optional written brief is absent", () => {
 		const input: IntelReport = {
 			...report,

@@ -32,6 +32,7 @@ export function reportToExportData(report: IntelReport) {
 		sourceFingerprint: report.sourceFingerprint,
 		remoteFileDeleted: report.remoteFileDeleted,
 		context: {
+			researchGoal: report.settings.researchGoal ?? "",
 			companyDomain: companyContext?.domain ?? "",
 			productBrief: report.settings.productBrief,
 			competitor: report.settings.competitor,
@@ -41,6 +42,89 @@ export function reportToExportData(report: IntelReport) {
 		...(companyContext ? { companyContext } : {}),
 		analysis: {
 			summary: report.analysis.summary,
+			...(report.analysis.journey
+				? {
+						journey: {
+							goal: text(report.analysis.journey.goal),
+							goalBasis: report.analysis.journey.goalBasis,
+							outcome: text(report.analysis.journey.outcome),
+							coverage: report.analysis.journey.coverage,
+							stages: report.analysis.journey.stages.map(({ name, purpose, evidenceTimesSec }) => ({
+								name: text(name),
+								purpose: text(purpose),
+								evidenceTimesSec: [...evidenceTimesSec],
+							})),
+						},
+					}
+				: {}),
+			...(report.analysis.understanding
+				? {
+						understanding: {
+							product: text(report.analysis.understanding.product),
+							audience: text(report.analysis.understanding.audience),
+							job: text(report.analysis.understanding.job),
+							confidence: report.analysis.understanding.confidence,
+						},
+					}
+				: {}),
+			...(report.analysis.readout
+				? {
+						readout: {
+							strengths: report.analysis.readout.strengths.map(
+								({ title, reason, basis, confidence, evidenceTimesSec }) => ({
+									title: text(title),
+									reason: text(reason),
+									basis,
+									confidence,
+									evidenceTimesSec: [...evidenceTimesSec],
+								}),
+							),
+							frictions: report.analysis.readout.frictions.map(
+								({ title, reason, basis, confidence, evidenceTimesSec }) => ({
+									title: text(title),
+									reason: text(reason),
+									basis,
+									confidence,
+									evidenceTimesSec: [...evidenceTimesSec],
+								}),
+							),
+						},
+					}
+				: {}),
+			...(report.analysis.decisions
+				? {
+						decisions: report.analysis.decisions.map(
+							({
+								title,
+								recommendation,
+								rationale,
+								counterEvidence,
+								experiment,
+								tradeoff,
+								confidence,
+								evidenceTimesSec,
+							}) => ({
+								title: text(title),
+								recommendation,
+								rationale: text(rationale),
+								counterEvidence: text(counterEvidence),
+								experiment: text(experiment),
+								tradeoff: text(tradeoff),
+								confidence,
+								evidenceTimesSec: [...evidenceTimesSec],
+							}),
+						),
+					}
+				: {}),
+			...(report.analysis.pieces
+				? {
+						pieces: report.analysis.pieces.map(({ name, purpose, timeSec }) => ({
+							name: text(name),
+							purpose: text(purpose),
+							timeSec,
+						})),
+					}
+				: {}),
 			steps: report.analysis.steps.map(({ timeSec, action, evidence }) => ({
 				timeSec,
 				action,
@@ -91,6 +175,7 @@ export function reportToMarkdown(report: IntelReport): string {
 	const sections = [
 		"# Product intelligence report",
 		"## Context",
+		`### Research goal\n\n${quote(settings.researchGoal || "Not supplied; any inferred goal needs validation.")}`,
 		`### Company domain\n\n${quote(companyContext?.domain || "Not supplied")}`,
 		`### Company website retrieval\n\n${
 			companyContext?.status === "retrieved"
@@ -106,8 +191,54 @@ export function reportToMarkdown(report: IntelReport): string {
 		`- Created at: ${text(report.createdAt)}\n- Model: ${text(settings.model)}\n- Project ID: ${text(report.projectId)}\n- Asset ID: ${text(report.assetId)}\n- Source fingerprint: ${text(report.sourceFingerprint)}\n- Raw source duration: ${report.durationSec}s\n- Remote file deletion confirmed: ${report.remoteFileDeleted ? "yes" : "no"}`,
 		"All evidence timestamps are seconds from the beginning of the raw recording, independent of editor cuts or zooms. Findings retain their reported order; confidence does not establish business impact.",
 		`## Summary\n\n${quote(analysis.summary)}`,
-		"## Journey",
 	];
+	if (analysis.journey) {
+		const journey = analysis.journey;
+		sections.push(
+			`## Goal-led journey\n\n**Goal**\n\n${quote(journey.goal)}\n\n- Goal basis: ${journey.goalBasis}\n- Coverage: ${journey.coverage}\n\n**Observed outcome and gaps**\n\n${quote(journey.outcome)}`,
+		);
+		if (!journey.stages.length) sections.push("No supported journey stages reported.");
+		for (const stage of journey.stages)
+			sections.push(
+				`### ${text(stage.name)}\n\n${quote(stage.purpose)}\n\n- Raw source evidence: ${stage.evidenceTimesSec.map((seconds) => `[${timestamp(seconds)}](#raw-source-${seconds}s)`).join(", ")}`,
+			);
+	}
+	if (analysis.understanding) {
+		const understanding = analysis.understanding;
+		sections.push(
+			`## Product understanding\n\n**Product**\n\n${quote(understanding.product)}\n\n**Audience**\n\n${quote(understanding.audience)}\n\n**Job**\n\n${quote(understanding.job)}\n\n- Confidence: ${understanding.confidence}`,
+		);
+	}
+	if (analysis.readout) {
+		for (const [name, insights] of [
+			["Strengths", analysis.readout.strengths],
+			["Frictions", analysis.readout.frictions],
+		] as const) {
+			sections.push(`## ${name}`);
+			if (!insights.length) sections.push("No supported insights reported.");
+			for (const insight of insights)
+				sections.push(
+					`### ${text(insight.title)}\n\n${quote(insight.reason)}\n\n- Basis: ${insight.basis}\n- Confidence: ${insight.confidence}\n- Raw source evidence: ${insight.evidenceTimesSec.map(timestamp).join(", ")}`,
+				);
+		}
+	}
+	if (analysis.decisions) {
+		sections.push("## Product decisions");
+		if (!analysis.decisions.length) sections.push("No supported product decisions reported.");
+		for (const decision of analysis.decisions)
+			sections.push(
+				`### ${text(decision.title)}\n\n- Recommendation: ${decision.recommendation}\n- Confidence: ${decision.confidence}\n- Raw source evidence: ${decision.evidenceTimesSec.map(timestamp).join(", ")}\n\n**Rationale**\n\n${quote(decision.rationale)}\n\n**Counterevidence**\n\n${quote(decision.counterEvidence)}\n\n**Experiment**\n\n${quote(decision.experiment)}\n\n**Tradeoff**\n\n${quote(decision.tradeoff)}`,
+			);
+	}
+	if (analysis.pieces) {
+		sections.push("## Product parts and purposes");
+		if (!analysis.pieces.length) sections.push("No supported product parts reported.");
+		for (const piece of analysis.pieces)
+			sections.push(
+				`### ${text(piece.name)} — ${timestamp(piece.timeSec)}\n\n${quote(piece.purpose)}`,
+			);
+	}
+	sections.push(analysis.journey ? "## Timestamped actions" : "## Journey");
 	if (!analysis.steps.length) sections.push("No timestamped journey steps reported.");
 	for (const [index, step] of analysis.steps.entries()) {
 		sections.push(
@@ -126,6 +257,18 @@ export function reportToMarkdown(report: IntelReport): string {
 		sections.push("No unknowns reported; this does not establish their absence.");
 	for (const [index, unknown] of analysis.unknowns.entries()) {
 		sections.push(`### Unknown ${index + 1}\n\n${quote(unknown)}`);
+	}
+	if (analysis.journey?.stages.length) {
+		sections.push("## Raw source timestamp index");
+		const times = [...new Set(analysis.journey.stages.flatMap((stage) => stage.evidenceTimesSec))];
+		for (const seconds of times.sort((a, b) => a - b)) {
+			const evidence = analysis.steps
+				.filter((step) => step.timeSec === seconds)
+				.map((step) => step.evidence);
+			sections.push(
+				`<a id="raw-source-${seconds}s"></a>\n\n### ${timestamp(seconds)}${evidence.length ? `\n\n${quote(evidence.join("\n"))}` : ""}`,
+			);
+		}
 	}
 	return `${sections.join("\n\n")}\n`;
 }

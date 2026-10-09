@@ -12,6 +12,9 @@ vi.mock("@/native/client", () => ({
 		productIntel: { snapshot: vi.fn(), saveSettings: vi.fn() },
 		aiEdition: { llmSetApiKey: vi.fn() },
 		screenshotIntel: {
+			capture: vi.fn(),
+			captureAccess: vi.fn(),
+			openCaptureSettings: vi.fn(),
 			pick: vi.fn(),
 			import: vi.fn(),
 			list: vi.fn(),
@@ -69,6 +72,11 @@ beforeEach(() => {
 	);
 	vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([]);
 	vi.mocked(nativeBridgeClient.screenshotIntel.pick).mockResolvedValue(batch);
+	vi.mocked(nativeBridgeClient.screenshotIntel.capture).mockResolvedValue(batch);
+	vi.mocked(nativeBridgeClient.screenshotIntel.captureAccess).mockResolvedValue({
+		status: "granted",
+	});
+	vi.mocked(nativeBridgeClient.screenshotIntel.openCaptureSettings).mockResolvedValue();
 	vi.mocked(nativeBridgeClient.screenshotIntel.import).mockResolvedValue(batch);
 	vi.mocked(nativeBridgeClient.screenshotIntel.analyze).mockResolvedValue(analyzed);
 	vi.mocked(nativeBridgeClient.screenshotIntel.reveal).mockResolvedValue();
@@ -114,7 +122,7 @@ describe("ScreenshotBoard", () => {
 		fireEvent.click(screen.getByText("More", { selector: "summary" }));
 		expect(screen.getByLabelText("Recent research")).toBeVisible();
 	});
-	it("saves exact product context and shows grouped AI names, three advices and enlarged evidence", async () => {
+	it("saves exact product context and discloses legacy advice beside grouped evidence", async () => {
 		await loadExistingBatch();
 		openMore();
 		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
@@ -129,6 +137,9 @@ describe("ScreenshotBoard", () => {
 		expect(nativeBridgeClient.screenshotIntel.analyze).toHaveBeenCalledWith(batch.id);
 		expect(screen.getByRole("region", { name: "Setup" })).toBeVisible();
 		const advice = screen.getByRole("region", { name: "Product advice" });
+		expect(within(advice).getByText("Advice 1")).toBeVisible();
+		expect(within(advice).queryByText("Advice 3")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "More takeaways (2)" }));
 		expect(within(advice).getByText("Advice 3")).toBeVisible();
 		expect(within(advice).queryByText("Advice 4")).not.toBeInTheDocument();
 		expect(screen.queryByText("Hypothesis 1")).not.toBeInTheDocument();
@@ -847,16 +858,18 @@ describe("Product brief", () => {
 		}
 	});
 
-	it("retains the three-decision legacy view for stored reports without a readout", async () => {
+	it("keeps legacy decisions readable behind a compact first decision without re-upload", async () => {
 		const { readout: _readout, ...legacyAnalysis } = brief.analysis!;
 		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([
 			{ ...brief, analysis: legacyAnalysis },
 		]);
 		render(<ScreenshotBoard active />);
 		await screen.findByRole("heading", { name: "Product takeaways" });
-		expect(screen.getByText("Test permission clarity")).toBeVisible();
+		expect(screen.queryByText("Test permission clarity")).not.toBeInTheDocument();
 		expect(screen.queryByText("Test saved views")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "More decisions (1)" })).toBeVisible();
+		fireEvent.click(screen.getByRole("button", { name: "More decisions (3)" }));
+		expect(screen.getByText("Test permission clarity")).toBeVisible();
+		expect(screen.getByText("Test saved views")).toBeVisible();
 		expect(screen.queryByRole("region", { name: "Works well" })).not.toBeInTheDocument();
 		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
 	});
@@ -1228,5 +1241,395 @@ describe("compact visual product groups", () => {
 			expect(screen.getByRole("button", { name: "Analyze again" })).toBeEnabled(),
 		);
 		expect(screen.queryByText("Clear hierarchy")).not.toBeInTheDocument();
+	});
+});
+
+it("captures an explicitly selected macOS screen into the automatic research pipeline", async () => {
+	vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+	render(<ScreenshotBoard active />);
+	const capture = await screen.findByRole("button", { name: "Take screenshot" });
+	await waitFor(() => expect(capture).toBeEnabled());
+	fireEvent.click(capture);
+	await waitFor(() =>
+		expect(nativeBridgeClient.screenshotIntel.analyze).toHaveBeenCalledExactlyOnceWith(batch.id),
+	);
+	expect(nativeBridgeClient.screenshotIntel.capture).toHaveBeenCalledOnce();
+	expect(nativeBridgeClient.screenshotIntel.pick).not.toHaveBeenCalled();
+});
+it("keeps prior research when an interactive screenshot is cancelled", async () => {
+	vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+	vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([analyzed]);
+	vi.mocked(nativeBridgeClient.screenshotIntel.capture).mockResolvedValue(null);
+	render(<ScreenshotBoard active />);
+	const capture = await screen.findByRole("button", { name: "Take screenshot" });
+	await waitFor(() => expect(capture).toBeEnabled());
+	fireEvent.click(capture);
+	await waitFor(() => expect(nativeBridgeClient.screenshotIntel.capture).toHaveBeenCalledOnce());
+	await waitFor(() => expect(capture).toBeEnabled());
+	expect(screen.getByText("Setup uses focused choices.")).toBeInTheDocument();
+	expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+});
+
+describe("inline screenshot permission recovery", () => {
+	beforeEach(() => {
+		vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+	});
+	async function requestCapture() {
+		const capture = await screen.findByRole("button", { name: "Take screenshot" });
+		await waitFor(() => expect(capture).toBeEnabled());
+		fireEvent.click(capture);
+	}
+	it("does not check permission at startup, on focus without a card, or for imported files", async () => {
+		render(<ScreenshotBoard active />);
+		const choose = screen.getByRole("button", { name: "Choose screenshots" });
+		await waitFor(() => expect(choose).toBeEnabled());
+		fireEvent.focus(window);
+		expect(nativeBridgeClient.screenshotIntel.captureAccess).not.toHaveBeenCalled();
+		fireEvent.click(choose);
+		await screen.findByRole("heading", { name: "Product takeaways" });
+		expect(nativeBridgeClient.screenshotIntel.captureAccess).not.toHaveBeenCalled();
+		expect(nativeBridgeClient.screenshotIntel.capture).not.toHaveBeenCalled();
+		expect(screen.queryByRole("region", { name: "Screen capture access" })).not.toBeInTheDocument();
+	});
+	it.each([
+		"not-determined",
+		"denied",
+		"restricted",
+		"unknown",
+	] as const)("shows quiet recovery for %s access without capturing or uploading", async (status) => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.captureAccess).mockResolvedValue({ status });
+		render(<ScreenshotBoard active />);
+		await requestCapture();
+		const card = await screen.findByRole("region", { name: "Screen capture access" });
+		expect(within(card).getByRole("heading", { name: "Allow screen capture" })).toBeVisible();
+		expect(within(card).getByRole("button", { name: "Open System Settings" })).toBeVisible();
+		expect(within(card).getByRole("button", { name: "Check access & capture" })).toBeVisible();
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		expect(screen.getByLabelText("Gemini API key")).not.toBeVisible();
+		expect(nativeBridgeClient.screenshotIntel.capture).not.toHaveBeenCalled();
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+	});
+	it("opens settings and rechecks on focus without silently capturing after permission is granted", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.captureAccess)
+			.mockResolvedValueOnce({ status: "denied" })
+			.mockResolvedValue({ status: "granted" });
+		render(<ScreenshotBoard active />);
+		await requestCapture();
+		fireEvent.click(await screen.findByRole("button", { name: "Open System Settings" }));
+		await waitFor(() =>
+			expect(nativeBridgeClient.screenshotIntel.openCaptureSettings).toHaveBeenCalledOnce(),
+		);
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Check access & capture" })).toBeEnabled(),
+		);
+		fireEvent.focus(window);
+		await screen.findByRole("heading", { name: "Screen capture is ready" });
+		expect(nativeBridgeClient.screenshotIntel.capture).not.toHaveBeenCalled();
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
+		await waitFor(() => expect(nativeBridgeClient.screenshotIntel.capture).toHaveBeenCalledOnce());
+		await waitFor(() => expect(nativeBridgeClient.screenshotIntel.analyze).toHaveBeenCalledOnce());
+		expect(nativeBridgeClient.screenshotIntel.captureAccess).toHaveBeenCalledTimes(3);
+	});
+	it("preserves prior research when permission recovery is dismissed and ignores its stale recheck", async () => {
+		let finish: ((result: { status: "granted" }) => void) | undefined;
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([analyzed]);
+		vi.mocked(nativeBridgeClient.screenshotIntel.captureAccess)
+			.mockResolvedValueOnce({ status: "denied" })
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						finish = resolve;
+					}),
+			);
+		render(<ScreenshotBoard active />);
+		await requestCapture();
+		fireEvent.click(await screen.findByRole("button", { name: "Check access & capture" }));
+		await waitFor(() =>
+			expect(nativeBridgeClient.screenshotIntel.captureAccess).toHaveBeenCalledTimes(2),
+		);
+		expect(screen.getByRole("button", { name: "Choose screenshots" })).toBeDisabled();
+		fireEvent.click(screen.getByRole("button", { name: "Use screenshots instead" }));
+		await act(async () => finish?.({ status: "granted" }));
+		expect(screen.queryByRole("region", { name: "Screen capture access" })).not.toBeInTheDocument();
+		expect(screen.getByText("Setup uses focused choices.")).toBeVisible();
+		expect(screen.getByRole("button", { name: "Choose screenshots" })).toBeEnabled();
+		expect(nativeBridgeClient.screenshotIntel.capture).not.toHaveBeenCalled();
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+	});
+	it("allows friendly access-check failure recovery and captures only after an explicit retry", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.captureAccess)
+			.mockRejectedValueOnce(new Error("permission IPC unavailable"))
+			.mockResolvedValue({ status: "granted" });
+		render(<ScreenshotBoard active />);
+		await requestCapture();
+		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn’t check screen access");
+		expect(nativeBridgeClient.screenshotIntel.capture).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Check access & capture" }));
+		await waitFor(() => expect(nativeBridgeClient.screenshotIntel.capture).toHaveBeenCalledOnce());
+	});
+	it("keeps capture errors actionable instead of ending at a native error", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.capture).mockRejectedValueOnce(
+			new Error("Screen Recording permission denied"),
+		);
+		render(<ScreenshotBoard active />);
+		await requestCapture();
+		expect(await screen.findByRole("alert")).toHaveTextContent("Screen capture couldn’t start");
+		expect(screen.getByRole("button", { name: "Check access & capture" })).toBeEnabled();
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+	});
+});
+
+it("keeps a long legacy summary compact and expands the exact stored text", async () => {
+	const summary = "Original report words. ".repeat(35);
+	vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([
+		{ ...analyzed, analysis: { ...analyzed.analysis!, summary } },
+	]);
+	render(<ScreenshotBoard active />);
+	await screen.findByRole("heading", { name: "Product takeaways" });
+	expect(screen.getByText(`${summary.slice(0, 250).trimEnd()}…`)).toBeVisible();
+	expect(screen.queryByText(summary)).not.toBeInTheDocument();
+	expect(screen.queryByText("Advice 2")).not.toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", { name: "Full summary" }));
+	expect(screen.getByText(summary.trim())).toBeVisible();
+	fireEvent.click(screen.getByRole("button", { name: "More takeaways (2)" }));
+	expect(screen.getByText("Advice 3")).toBeVisible();
+	expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+});
+
+const journeyBrief: ScreenshotBatch = {
+	...brief,
+	settings: DEFAULT_INTEL_SETTINGS,
+	analysis: {
+		...brief.analysis!,
+		journey: {
+			goal: "Choose a suitable workspace configuration.",
+			goalBasis: "inferred",
+			outcome: "A workspace screen is visible; successful setup is not established.",
+			coverage: "collection",
+			stages: [
+				{
+					name: "Configuration choices",
+					purpose: "Compare configuration options relevant to a workspace.",
+					evidenceImageIds: [batch.images[3].id, batch.images[1].id],
+				},
+				{
+					name: "Saved workspace",
+					purpose: "Find existing work without establishing its relationship to setup.",
+					evidenceImageIds: [batch.images[2].id],
+				},
+			],
+		},
+	},
+};
+
+describe("Screenshot goal and product map", () => {
+	it("shows one qualified goal and keeps the unordered map and outcome closed on restored reports", async () => {
+		await loadBrief(journeyBrief);
+		expect(screen.getByText("A focused workspace")).toBeVisible();
+		expect(screen.getByText("Inferred goal")).toBeVisible();
+		expect(screen.getByText(journeyBrief.analysis!.journey!.goal)).toBeVisible();
+		expect(screen.queryByText("Coordinate work")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Explore product pieces" })).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
+		expect(screen.queryByText("Configuration choices")).not.toBeInTheDocument();
+		expect(screen.queryByText(journeyBrief.analysis!.journey!.outcome)).not.toBeInTheDocument();
+		expect(screen.queryByRole("region", { name: "Screenshot library" })).not.toBeInTheDocument();
+		expect(screen.getByText("Focused choices")).toBeVisible();
+		expect(screen.getByText("Unclear permission scope")).toBeVisible();
+		expect(screen.getByText("Test progressive setup")).toBeVisible();
+		expect(screen.queryByText("Test discoverability")).not.toBeInTheDocument();
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Explore product pieces" }));
+		expect(
+			screen.getByText("Unordered screenshot map. Sequence and task completion are unverified."),
+		).toBeVisible();
+		expect(screen.getByText(journeyBrief.analysis!.journey!.outcome)).toBeVisible();
+		expect(
+			screen.getByText("Compare configuration options relevant to a workspace."),
+		).toBeVisible();
+		expect(document.querySelector("#screenshot-product-pieces ol")).not.toBeInTheDocument();
+	});
+
+	it("opens only the map piece's cited originals while the screenshot library is unmounted", async () => {
+		await loadBrief(journeyBrief);
+		fireEvent.click(screen.getByRole("button", { name: "Explore product pieces" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "Evidence for product piece Configuration choices" }),
+		);
+		const dialog = screen.getByRole("dialog");
+		expect(within(dialog).getByRole("img", { name: "AI name 4" })).toHaveAttribute(
+			"src",
+			expect.stringContaining("Capture%204.png"),
+		);
+		expect(within(dialog).getByRole("button", { name: "Previous screenshot" })).toBeDisabled();
+		fireEvent.click(within(dialog).getByRole("button", { name: "Next screenshot" }));
+		expect(within(dialog).getByRole("img", { name: "AI name 2" })).toBeVisible();
+		expect(within(dialog).getByRole("button", { name: "Next screenshot" })).toBeDisabled();
+		expect(screen.queryByRole("region", { name: "Screenshot library" })).not.toBeInTheDocument();
+	});
+
+	it("saves the optional research question exactly, keeps task separate, and marks existing advice stale", async () => {
+		await loadBrief(journeyBrief);
+		const question = screen.getByLabelText("What are you trying to learn? (optional)");
+		expect(question).not.toBeVisible();
+		openMore();
+		expect(question).not.toBeVisible();
+		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
+		expect(question).toBeVisible();
+		expect(question).toHaveAttribute("maxlength", "2000");
+		const words = "  why THIS setup??\nKeep our weird phrasing.  ";
+		fireEvent.change(question, { target: { value: words } });
+		expect(screen.getByRole("note")).toHaveTextContent("Context changed");
+		fireEvent.blur(question);
+		await waitFor(() =>
+			expect(nativeBridgeClient.productIntel.saveSettings).toHaveBeenCalledExactlyOnceWith(
+				expect.objectContaining({
+					researchGoal: words,
+					task: "",
+					productBrief: "",
+				}),
+			),
+		);
+		expect(question).toHaveValue(words);
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+	});
+
+	it("matches map reasoning only to cited images and resets the deep disclosure after rerun", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.analyze).mockResolvedValue(journeyBrief);
+		await loadBrief(journeyBrief);
+		fireEvent.click(screen.getByRole("button", { name: "Explore product pieces" }));
+		await browseScreens();
+		fireEvent.change(screen.getByLabelText("Search screenshots"), {
+			target: { value: "Compare configuration" },
+		});
+		expect(screen.getByRole("button", { name: "View AI name 2" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "View AI name 4" })).toBeVisible();
+		expect(screen.queryByRole("button", { name: "View AI name 1" })).not.toBeInTheDocument();
+		openMore();
+		fireEvent.click(screen.getByRole("button", { name: "Analyze again" }));
+		await waitFor(() => expect(nativeBridgeClient.screenshotIntel.analyze).toHaveBeenCalledOnce());
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Explore product pieces" })).toHaveAttribute(
+				"aria-expanded",
+				"false",
+			),
+		);
+		expect(screen.queryByText("Configuration choices")).not.toBeInTheDocument();
+	});
+
+	it.each([
+		"supplied",
+		"unknown",
+	] as const)("qualifies a %s goal and leaves unsupported map pieces empty", async (goalBasis) => {
+		await loadBrief({
+			...journeyBrief,
+			analysis: {
+				...journeyBrief.analysis!,
+				journey: { ...journeyBrief.analysis!.journey!, goalBasis, stages: [] },
+			},
+		});
+		expect(
+			screen.getByText(goalBasis === "supplied" ? "Supplied goal" : "Goal unclear"),
+		).toBeVisible();
+		fireEvent.click(screen.getByRole("button", { name: "Explore product pieces" }));
+		expect(screen.getByText("No supported relationships between these screens.")).toBeVisible();
+		expect(
+			screen.queryByRole("button", { name: /Evidence for product piece/ }),
+		).not.toBeInTheDocument();
+	});
+
+	it("keeps a legacy product job readable without inventing a map or reanalyzing", async () => {
+		await loadBrief();
+		expect(screen.getByText("Coordinate work")).toBeVisible();
+		expect(
+			screen.queryByRole("button", { name: "Explore product pieces" }),
+		).not.toBeInTheDocument();
+		expect(screen.queryByText("Inferred goal")).not.toBeInTheDocument();
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		"JSON",
+		"Markdown",
+	])("exports %s with distinct research goal, full unordered map and safe cited labels", async (format) => {
+		const secret = `AIza${"a".repeat(35)}`;
+		const report = {
+			...journeyBrief,
+			settings: {
+				...DEFAULT_INTEL_SETTINGS,
+				researchGoal: "Compare setup clarity",
+				task: "Configure a workspace",
+			},
+			analysis: {
+				...journeyBrief.analysis!,
+				journey: {
+					...journeyBrief.analysis!.journey!,
+					apiKey: "UNEXPORTED FIELD",
+					stages: journeyBrief.analysis!.journey!.stages.map((stage) => ({
+						...stage,
+						purpose: `${stage.purpose} ${secret} /Users/test/private/source.png`,
+						path: "UNEXPORTED PATH",
+					})),
+				},
+			},
+		};
+		const create = vi.fn((_blob: Blob) => "blob:report");
+		vi.stubGlobal(
+			"URL",
+			class extends URL {
+				static createObjectURL = create;
+				static revokeObjectURL = vi.fn();
+			},
+		);
+		vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+			/* Prevent jsdom navigation. */
+		});
+		await loadBrief(report);
+		openMore();
+		fireEvent.click(screen.getByRole("button", { name: `Export ${format}` }));
+		const contents = await new Promise<string>((resolve) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(String(reader.result));
+			reader.readAsText(create.mock.calls[0][0]);
+		});
+		expect(contents).toContain("Compare setup clarity");
+		expect(contents).toContain("Configure a workspace");
+		expect(contents).toContain("Saved workspace");
+		expect(contents).toContain("collection");
+		expect(contents).not.toContain(secret);
+		expect(contents).not.toContain("/Users/test");
+		expect(contents).not.toContain("UNEXPORTED");
+		if (format === "JSON") {
+			const shared = JSON.parse(contents) as {
+				context: { researchGoal: string; task: string };
+				analysis: { journey: unknown };
+			};
+			expect(shared.context).toMatchObject({
+				researchGoal: "Compare setup clarity",
+				task: "Configure a workspace",
+			});
+			expect(shared.analysis.journey).toMatchObject({
+				goalBasis: "inferred",
+				coverage: "collection",
+				stages: [
+					{
+						name: "Configuration choices",
+						evidenceImageIds: [batch.images[3].id, batch.images[1].id],
+					},
+					{ name: "Saved workspace" },
+				],
+			});
+		} else {
+			expect(contents).toContain(
+				"Unordered screenshot map. Sequence and task completion are unverified.",
+			);
+			expect(contents).toContain(
+				`Evidence: ${batch.images[3].id} (AI name 4), ${batch.images[1].id} (AI name 2)`,
+			);
+			expect(contents).toContain("Goal basis: inferred");
+		}
 	});
 });

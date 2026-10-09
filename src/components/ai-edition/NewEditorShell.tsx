@@ -33,7 +33,11 @@ import {
 	documentSchema,
 } from "@/lib/ai-edition/schema";
 import { useMcpDocumentHost } from "@/lib/ai-edition/store/mcpDocumentHost";
-import { saveWithDeadline, useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import {
+	getProjectTransitionVersion,
+	saveWithDeadline,
+	useProjectStore,
+} from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
 	useAutoTranscription,
@@ -219,7 +223,8 @@ export function NewEditorShell() {
 	const [freshRecordingProjectId, setFreshRecordingProjectId] = useState<string | null>(null);
 	const pendingChatPrompt = useChatPromptBus((s) => s.pending);
 	useEffect(() => {
-		if (pendingChatPrompt && (mode !== "edit" || !chatOpen)) {
+		// An editor prompt must never pull research or capture into the legacy studio.
+		if (pendingChatPrompt && (mode === "edit" || mode === "media") && !chatOpen) {
 			setMode("edit");
 			setChatOpen(true);
 		}
@@ -315,10 +320,13 @@ export function NewEditorShell() {
 	// edit the user just undid came back. `history: false` is load-bearing — a
 	// recording save here would push the restored document straight back onto the
 	// stack and clear the redo the undo had just created.
-	const { runUndo, runRedo } = useUndoRedoShortcuts(() => {
-		const doc = useProjectStore.getState().document;
-		if (doc) void useProjectStore.getState().saveDocument(doc, { history: false });
-	});
+	const { runUndo, runRedo } = useUndoRedoShortcuts(
+		() => {
+			const doc = useProjectStore.getState().document;
+			if (doc) void useProjectStore.getState().saveDocument(doc, { history: false });
+		},
+		mode === "edit" || mode === "media",
+	);
 	const [copiedClipId, setCopiedClipId] = useState<string | null>(null);
 	const [projectSummaries, setProjectSummaries] = useState<AiEditionProjectSummary[]>([]);
 	const seekSeqRef = useRef(0);
@@ -352,6 +360,14 @@ export function NewEditorShell() {
 			});
 		},
 		[dirty],
+	);
+	const requestProjectDialog = useCallback(
+		async (action: "new" | "open") => {
+			if ((await promptUnsaved(action)) === "cancel") return;
+			if (action === "new") setNewProjectOpen(true);
+			else setOpenProjectOpen(true);
+		},
+		[promptUnsaved],
 	);
 
 	const primaryAssetPath =
@@ -388,6 +404,7 @@ export function NewEditorShell() {
 		initRef.current = true;
 		void (async () => {
 			if (!window.electronAPI) return;
+			const startupTransition = getProjectTransitionVersion();
 			try {
 				if (await importPendingRecording((warning) => toast.warning(warning))) {
 					setFreshRecordingProjectId(useProjectStore.getState().projectId);
@@ -408,8 +425,10 @@ export function NewEditorShell() {
 			// consumed on import, it is also what reopening the editor after a
 			// recording lands on: the project that recording went into, settings and
 			// all, instead of a second project on the same file.
+			if (getProjectTransitionVersion() !== startupTransition) return;
 			try {
 				const projects = await nativeBridgeClient.aiEdition.listProjects();
+				if (getProjectTransitionVersion() !== startupTransition) return;
 				console.info("[editor] listProjects returned", projects);
 				if (projects.length > 0) {
 					console.info("[editor] auto-loading project", projects[0].id);
@@ -848,19 +867,25 @@ export function NewEditorShell() {
 	);
 
 	// The dialog's starting point picks the tab the fresh project opens on:
-	// "import" → Media (browse/drop assets), "screen-recording" → Rec (capture).
+	// Research keeps its focused workspace; the full editor retains its Media starting point.
 	const handleCreateProject = useCallback(
 		async (title: string, startingPoint: StartingPoint) => {
 			try {
 				await createProject(title);
-				setMode(startingPoint === "screen-recording" ? "rec" : "media");
+				setMode(
+					startingPoint === "screen-recording"
+						? "rec"
+						: mode === "research" || mode === "rec"
+							? "research"
+							: "media",
+				);
 			} catch (err) {
 				toast.error("Could not create project", {
 					description: err instanceof Error ? err.message : String(err),
 				});
 			}
 		},
-		[createProject],
+		[createProject, mode],
 	);
 
 	// The only way to get rid of a project short of deleting its file by hand.
@@ -905,8 +930,8 @@ export function NewEditorShell() {
 		const api = window.electronAPI;
 		if (!api) return;
 		const unsubscribers = [
-			api.onMenuNewProject?.(() => setNewProjectOpen(true)),
-			api.onMenuLoadProject?.(() => setOpenProjectOpen(true)),
+			api.onMenuNewProject?.(() => void requestProjectDialog("new")),
+			api.onMenuLoadProject?.(() => void requestProjectDialog("open")),
 			api.onMenuSaveProject?.(() => void handleSave()),
 			api.onMenuSaveProjectAs?.(() => void handleSave()),
 			api.onMenuUndo?.(runUndo),
@@ -915,7 +940,7 @@ export function NewEditorShell() {
 		return () => {
 			for (const unsub of unsubscribers) unsub?.();
 		};
-	}, [handleSave, runUndo, runRedo]);
+	}, [handleSave, runUndo, runRedo, requestProjectDialog]);
 
 	const handleRenameProject = useCallback(
 		async (title: string) => {
@@ -930,7 +955,7 @@ export function NewEditorShell() {
 	const handleConfirmUnsaved = useCallback(
 		(choice: UnsavedChoice) => {
 			if (!unsavedPrompt) return;
-			const { action, resolve } = unsavedPrompt;
+			const { resolve } = unsavedPrompt;
 			setUnsavedPrompt(null);
 			// ponytail: resolve the action when the user picks save / discard.
 			// The "continue with action" path is handled below in handleNewRecording /
@@ -950,11 +975,6 @@ export function NewEditorShell() {
 						resolve("cancel");
 						return;
 					}
-				}
-				if (action === "record") {
-					void window.electronAPI?.startNewRecording?.().catch((err) => {
-						console.warn("[editor] failed to start a new recording:", err);
-					});
 				}
 				resolve(choice);
 			})();
@@ -980,9 +1000,12 @@ export function NewEditorShell() {
 			const choice = await promptUnsaved("new");
 			if (choice === "cancel") return;
 			const label = picker.name || picker.path.split(/[\\/]/).pop() || "Recording";
-			await createProject(label.replace(/\.[^.]+$/, ""));
+			const created = await createProject(label.replace(/\.[^.]+$/, ""));
+			if (useProjectStore.getState().projectId !== created.project.id) return;
 			const asset = await useProjectStore.getState().addAsset(picker.path, label);
+			if (useProjectStore.getState().projectId !== created.project.id) return;
 			if (!asset) throw new Error("The recording could not be imported. Please try again.");
+			setFreshRecordingProjectId(created.project.id);
 			setMode("research");
 			toast.success("Recording ready for research");
 		} catch (error) {
@@ -1260,30 +1283,12 @@ export function NewEditorShell() {
 			}
 			if (ctrl && e.key === "n") {
 				e.preventDefault();
-				void (async () => {
-					const choice = await promptUnsaved("new");
-					if (choice === "cancel") return;
-					if (choice === "save") {
-						const doc = useProjectStore.getState().document;
-						// Stay put if the save did not land -- the store has already said why.
-						if (doc && !(await saveDocument(doc, { history: true }))) return;
-					}
-					setNewProjectOpen(true);
-				})();
+				void requestProjectDialog("new");
 				return;
 			}
 			if (ctrl && e.key === "o") {
 				e.preventDefault();
-				void (async () => {
-					const choice = await promptUnsaved("open");
-					if (choice === "cancel") return;
-					if (choice === "save") {
-						const doc = useProjectStore.getState().document;
-						// Stay put if the save did not land -- the store has already said why.
-						if (doc && !(await saveDocument(doc, { history: true }))) return;
-					}
-					setOpenProjectOpen(true);
-				})();
+				void requestProjectDialog("open");
 				return;
 			}
 			if (!hasProject && e.key !== "?") return;
@@ -1294,7 +1299,7 @@ export function NewEditorShell() {
 				return;
 			}
 
-			if (mode === "research") return;
+			if (mode === "research" || mode === "rec") return;
 
 			const deleteSelection = () => {
 				// F2.7 — a shift-click multi-selection deletes as one batch (one
@@ -1456,8 +1461,7 @@ export function NewEditorShell() {
 		handleSave,
 		pasteRegion,
 		tl,
-		promptUnsaved,
-		saveDocument,
+		requestProjectDialog,
 		copiedClipId,
 		openShortcutsConfig,
 		shortcuts,
@@ -1566,7 +1570,7 @@ export function NewEditorShell() {
 		>
 			{mode === "edit" ? <NativePlaybackSync visibleClips={visibleClips} clips={clips} /> : null}
 			<EditorTopBar
-				mode={mode}
+				mode={mode === "rec" ? "research" : mode}
 				onModeChange={(next) => {
 					setPlaying(false);
 					setMode(next);
@@ -1584,8 +1588,8 @@ export function NewEditorShell() {
 						setPlaying(false);
 						setMode("research");
 					},
-					openProject: () => setOpenProjectOpen(true),
-					newProject: () => setNewProjectOpen(true),
+					openProject: () => void requestProjectDialog("open"),
+					newProject: () => void requestProjectDialog("new"),
 					save: () => void handleSave(),
 					export: handleExport,
 					openSettings: handleOpenSettings,
@@ -1726,6 +1730,7 @@ export function NewEditorShell() {
 						<MediaStage onAddToTimeline={handleDropAsset} />
 					) : mode === "rec" ? (
 						<RecStage
+							compact
 							onStartRecording={() => void handleNewRecording()}
 							onClose={() => setMode("research")}
 						/>
