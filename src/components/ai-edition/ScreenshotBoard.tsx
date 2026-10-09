@@ -135,6 +135,8 @@ export function ScreenshotBoard({ active }: Props) {
 	const [error, setError] = useState("");
 	const [dragging, setDragging] = useState(false);
 	const [selectedImage, setSelectedImage] = useState<string | null>(null);
+	const [libraryOpen, setLibraryOpen] = useState(false);
+	const [libraryPage, setLibraryPage] = useState(0);
 	const [query, setQuery] = useState("");
 	const [groupFilter, setGroupFilter] = useState("");
 	const [contextExpanded, setContextExpanded] = useState(false);
@@ -142,8 +144,11 @@ export function ScreenshotBoard({ active }: Props) {
 	const [contextError, setContextError] = useState("");
 	const [summaryExpanded, setSummaryExpanded] = useState(false);
 	const [showAllDecisions, setShowAllDecisions] = useState(false);
+	const [showAllFindings, setShowAllFindings] = useState(false);
 	const [decisionEvidenceIds, setDecisionEvidenceIds] = useState<string[] | null>(null);
 	const working = useRef(false);
+	const cancelRequested = useRef(false);
+	const analysisStarted = useRef(false);
 	const more = useRef<HTMLDetailsElement>(null);
 	const keyInput = useRef<HTMLInputElement>(null);
 	const settingsDirty = useRef(false);
@@ -191,16 +196,20 @@ export function ScreenshotBoard({ active }: Props) {
 	}
 	function remember(next: ScreenshotBatch) {
 		if (next.id !== batch?.id) {
+			setLibraryOpen(false);
+			setLibraryPage(0);
 			setQuery("");
 			setGroupFilter("");
 		} else if (
 			groupFilter &&
 			!next.analysis?.screens.some((screen) => screen.group === groupFilter)
 		) {
+			setLibraryPage(0);
 			setGroupFilter("");
 		}
 		setSummaryExpanded(false);
 		setShowAllDecisions(false);
+		setShowAllFindings(false);
 		setDecisionEvidenceIds(null);
 		setBatch(next);
 		setSelectedImage(null);
@@ -237,6 +246,8 @@ export function ScreenshotBoard({ active }: Props) {
 	) {
 		if (working.current) return;
 		working.current = true;
+		cancelRequested.current = false;
+		analysisStarted.current = false;
 		setBusy(kind);
 		setError("");
 		try {
@@ -250,6 +261,8 @@ export function ScreenshotBoard({ active }: Props) {
 					settingsDirty.current = false;
 					setContextSave("saved");
 					setContextError("");
+					if (cancelRequested.current) throw new Error("Analysis cancelled");
+					analysisStarted.current = true;
 					remember(await nativeBridgeClient.screenshotIntel.analyze(result.id));
 				}
 			}
@@ -257,6 +270,7 @@ export function ScreenshotBoard({ active }: Props) {
 			setError(message(err));
 		} finally {
 			working.current = false;
+			analysisStarted.current = false;
 			setBusy(null);
 		}
 	}
@@ -290,6 +304,8 @@ export function ScreenshotBoard({ active }: Props) {
 			settingsDirty.current = false;
 			setContextSave("saved");
 			setContextError("");
+			if (cancelRequested.current) throw new Error("Analysis cancelled");
+			analysisStarted.current = true;
 			return nativeBridgeClient.screenshotIntel.analyze(batch.id);
 		});
 	}
@@ -395,6 +411,16 @@ export function ScreenshotBoard({ active }: Props) {
 			batch.settings.systemPrompt !== settings.systemPrompt);
 	const groups = new Map<string, ScreenshotBatch["images"]>();
 	const allGroups = [...new Set(analysis?.screens.map((screen) => screen.group) ?? [])];
+	const overviewGroups = allGroups.flatMap((group) => {
+		const images = (batch?.images ?? []).filter((image) =>
+			analysis?.screens.some((screen) => screen.imageId === image.id && screen.group === group),
+		);
+		return images.length ? [{ group, images }] : [];
+	});
+	const extraFindingCount = analysis?.readout
+		? Math.max(0, Math.min(3, analysis.readout.strengths.length) - 1) +
+			Math.max(0, Math.min(3, analysis.readout.frictions.length) - 1)
+		: 0;
 	const search = query.trim().toLocaleLowerCase();
 	for (const image of batch?.images ?? []) {
 		const screen = analysis?.screens.find((screen) => screen.imageId === image.id);
@@ -432,6 +458,15 @@ export function ScreenshotBoard({ active }: Props) {
 		groups.set(group, [...(groups.get(group) ?? []), image]);
 	}
 	const visibleImages = [...groups.values()].flat();
+	const pageCount = Math.ceil(visibleImages.length / 24);
+	const currentPage = Math.min(libraryPage, Math.max(0, pageCount - 1));
+	const pageImages = visibleImages.slice(currentPage * 24, (currentPage + 1) * 24);
+	const pageGroups = new Map<string, ScreenshotBatch["images"]>();
+	for (const image of pageImages) {
+		const group =
+			analysis?.screens.find((screen) => screen.imageId === image.id)?.group ?? "Screenshots";
+		pageGroups.set(group, [...(pageGroups.get(group) ?? []), image]);
+	}
 	const evidence = batch?.images.find((image) => image.id === selectedImage);
 	const evidenceScreen = analysis?.screens.find((screen) => screen.imageId === selectedImage);
 	const evidenceImages = decisionEvidenceIds
@@ -533,7 +568,7 @@ export function ScreenshotBoard({ active }: Props) {
 					(file) => window.electronAPI?.getPathForFile(file) ?? "",
 				);
 				if (!paths.length || paths.some((path) => !path)) {
-					setError("Could not read these files. Use Add screenshots to choose them.");
+					setError("Could not read these files. Select them with Choose screenshots.");
 					return;
 				}
 				void run("import", () => nativeBridgeClient.screenshotIntel.import(paths), true);
@@ -541,10 +576,9 @@ export function ScreenshotBoard({ active }: Props) {
 		>
 			<div className={`${styles.import} ${dragging ? styles.dragging : ""}`}>
 				<Images size={20} />
-				<span>
-					{batch
-						? `${batch.images.length} ${batch.images.length === 1 ? "screenshot" : "screenshots"}`
-						: "Drop screenshots here"}
+				<span className={styles.dropCopy}>
+					<span>Drop screenshots here</span>
+					<small>Up to 120 PNG, JPEG or WebP images</small>
 				</span>
 				<button
 					type="button"
@@ -552,11 +586,76 @@ export function ScreenshotBoard({ active }: Props) {
 					disabled={!loaded || !!busy}
 					onClick={() => void run("import", () => nativeBridgeClient.screenshotIntel.pick(), true)}
 				>
-					<Upload size={14} /> Add screenshots
+					<Upload size={14} /> Choose screenshots
 				</button>
 				<details className={styles.more} ref={more}>
 					<summary>More</summary>
 					<div className={styles.menu}>
+						<div className={styles.contextEditor}>
+							<div className={styles.contextHeading}>
+								<button
+									type="button"
+									aria-expanded={contextExpanded}
+									aria-controls="screenshot-product-context"
+									onClick={() => {
+										if (contextExpanded) void saveContext();
+										setContextExpanded((expanded) => !expanded);
+									}}
+								>
+									Our product <span>{contextExpanded ? "Hide" : "Edit"}</span>
+								</button>
+								<span className={styles.saveFeedback} aria-live="polite">
+									{contextSave === "saving"
+										? "Saving…"
+										: contextSave === "saved"
+											? "Saved"
+											: contextSave === "unsaved"
+												? "Unsaved changes"
+												: ""}
+								</span>
+							</div>
+							<label hidden={!contextExpanded} className={styles.companyDomain}>
+								Company domain (optional)
+								<input
+									aria-label="Company domain (optional)"
+									inputMode="url"
+									placeholder="company.com"
+									value={settings.companyDomain}
+									disabled={!loaded || !!busy}
+									onChange={(event) => update("companyDomain", event.target.value)}
+									onBlur={() => void saveContext()}
+								/>
+								<small>
+									Gemini reads your public site during analysis. Screens provide the rest.
+								</small>
+							</label>
+							<textarea
+								id="screenshot-product-context"
+								aria-label="Our product"
+								hidden={!contextExpanded}
+								rows={2}
+								placeholder="Optional: audience, decision, or constraints the screens don’t show"
+								value={settings.productBrief}
+								disabled={!loaded || !!busy}
+								onChange={(event) => update("productBrief", event.target.value)}
+								onBlur={() => void saveContext()}
+							/>
+							{!contextExpanded ? (
+								<p className={styles.contextPreview}>
+									{settings.companyDomain ||
+										settings.productBrief ||
+										"Learns from screens · add a company domain to tailor advice"}
+								</p>
+							) : null}
+							{contextError ? (
+								<div role="alert" className={styles.error}>
+									{contextError}
+									<button type="button" disabled={!!busy} onClick={() => void saveContext()}>
+										Retry save
+									</button>
+								</div>
+							) : null}
+						</div>
 						<div className={styles.connection}>
 							{keyError ? (
 								<div role="alert" className={styles.error}>
@@ -656,6 +755,30 @@ export function ScreenshotBoard({ active }: Props) {
 							</p>
 						</details>
 						{batch?.analysis ? (
+							<button
+								type="button"
+								className={styles.secondary}
+								disabled={!loaded || !!busy}
+								onClick={analyze}
+							>
+								<Sparkles size={14} /> Analyze again
+							</button>
+						) : null}
+						{batch?.organizedPath ? (
+							<button
+								type="button"
+								className={styles.secondary}
+								disabled={!!busy}
+								onClick={() =>
+									void nativeBridgeClient.screenshotIntel
+										.reveal(batch.id)
+										.catch((err) => setError(message(err)))
+								}
+							>
+								<FolderOpen size={14} /> Open organized folder
+							</button>
+						) : null}
+						{batch?.analysis ? (
 							<div className={styles.export}>
 								<button type="button" onClick={() => download("markdown")}>
 									Export Markdown
@@ -679,86 +802,18 @@ export function ScreenshotBoard({ active }: Props) {
 					</div>
 				</details>
 			</div>
-			<div className={styles.context}>
-				<div className={styles.contextEditor}>
-					<div className={styles.contextHeading}>
-						<button
-							type="button"
-							aria-expanded={contextExpanded}
-							aria-controls="screenshot-product-context"
-							onClick={() => {
-								if (contextExpanded) void saveContext();
-								setContextExpanded((expanded) => !expanded);
-							}}
-						>
-							Our product <span>{contextExpanded ? "Hide" : "Edit"}</span>
-						</button>
-						<span className={styles.saveFeedback} aria-live="polite">
-							{contextSave === "saving"
-								? "Saving…"
-								: contextSave === "saved"
-									? "Saved"
-									: contextSave === "unsaved"
-										? "Unsaved changes"
-										: ""}
-						</span>
-					</div>
-					<label hidden={!contextExpanded} className={styles.companyDomain}>
-						Company domain (optional)
-						<input
-							aria-label="Company domain (optional)"
-							inputMode="url"
-							placeholder="company.com"
-							value={settings.companyDomain}
-							disabled={!loaded || !!busy}
-							onChange={(event) => update("companyDomain", event.target.value)}
-							onBlur={() => void saveContext()}
-						/>
-						<small>Gemini reads your public site during analysis. Screens provide the rest.</small>
-					</label>
-					<textarea
-						id="screenshot-product-context"
-						aria-label="Our product"
-						hidden={!contextExpanded}
-						rows={2}
-						placeholder="Optional: audience, decision, or constraints the screens don’t show"
-						value={settings.productBrief}
-						disabled={!loaded || !!busy}
-						onChange={(event) => update("productBrief", event.target.value)}
-						onBlur={() => void saveContext()}
-					/>
-					{!contextExpanded ? (
-						<p className={styles.contextPreview}>
-							{settings.companyDomain ||
-								settings.productBrief ||
-								"Learns from screens · add a company domain to tailor advice"}
-						</p>
-					) : null}
-					{contextError ? (
-						<div role="alert" className={styles.error}>
-							{contextError}
-							<button type="button" disabled={!!busy} onClick={() => void saveContext()}>
-								Retry save
-							</button>
-						</div>
-					) : null}
-				</div>
-				<div className={styles.analyze}>
+			{batch && !analysis && !busy ? (
+				<div className={styles.pendingAnalysis}>
 					<button
 						type="button"
 						className={styles.primary}
-						disabled={!loaded || !batch?.images.length || !!busy}
+						disabled={!loaded || !batch.images.length}
 						onClick={analyze}
 					>
-						{busy === "analyze" ? (
-							<LoaderCircle size={15} className={styles.spin} />
-						) : (
-							<Sparkles size={15} />
-						)}
-						{busy === "analyze" ? "Analyzing screenshots…" : "Analyze screenshots"}
+						<Sparkles size={14} /> Analyze screenshots
 					</button>
 				</div>
-			</div>
+			) : null}
 			{error ? (
 				<div role="alert" className={styles.error}>
 					{error}
@@ -771,8 +826,9 @@ export function ScreenshotBoard({ active }: Props) {
 			) : null}
 			{busy && busy !== "key" ? (
 				<div role="status" className={styles.status}>
+					<LoaderCircle size={14} className={styles.spin} aria-hidden="true" />
 					{busy === "analyze"
-						? "Analyzing images and organizing copies…"
+						? "Analyzing screenshots…"
 						: busy === "import"
 							? "Importing screenshots…"
 							: busy === "organize"
@@ -781,11 +837,14 @@ export function ScreenshotBoard({ active }: Props) {
 					{busy === "analyze" && batch ? (
 						<button
 							type="button"
-							onClick={() =>
-								void nativeBridgeClient.screenshotIntel
-									.cancel(batch.id)
-									.catch((err) => setError(message(err)))
-							}
+							onClick={() => {
+								cancelRequested.current = true;
+								if (analysisStarted.current) {
+									void nativeBridgeClient.screenshotIntel
+										.cancel(batch.id)
+										.catch((err) => setError(message(err)));
+								}
+							}}
 						>
 							Cancel
 						</button>
@@ -803,6 +862,46 @@ export function ScreenshotBoard({ active }: Props) {
 					{batch.duplicatesSkipped === 1 ? "image skipped" : "images skipped"} in this import.
 					Originals are unchanged.
 				</p>
+			) : null}
+			{overviewGroups.length ? (
+				<section className={styles.groupOverview} aria-label="Screen groups">
+					<p>
+						{overviewGroups.length} {overviewGroups.length === 1 ? "group" : "groups"}
+					</p>
+					<div>
+						{overviewGroups.slice(0, 4).map(({ group, images }) => {
+							const image = images[0];
+							const label =
+								analysis?.screens.find((screen) => screen.imageId === image.id)?.label ??
+								image.originalName;
+							return (
+								<button
+									key={group}
+									type="button"
+									aria-label={`Browse ${group} · ${images.length} ${images.length === 1 ? "screen" : "screens"}`}
+									onClick={() => {
+										setQuery("");
+										setGroupFilter(group);
+										setLibraryPage(0);
+										setLibraryOpen(true);
+									}}
+								>
+									<img
+										src={toFileUrl(image.thumbnailPath ?? image.path)}
+										alt={label}
+										loading="lazy"
+									/>
+									<span>
+										<strong>{group}</strong>
+										<small>
+											{images.length} {images.length === 1 ? "screen" : "screens"}
+										</small>
+									</span>
+								</button>
+							);
+						})}
+					</div>
+				</section>
 			) : null}
 			{analysis ? (
 				<section
@@ -829,19 +928,6 @@ export function ScreenshotBoard({ active }: Props) {
 								</button>
 							}
 						</div>
-						{batch?.organizedPath ? (
-							<button
-								type="button"
-								className={styles.secondary}
-								onClick={() =>
-									void nativeBridgeClient.screenshotIntel
-										.reveal(batch.id)
-										.catch((err) => setError(message(err)))
-								}
-							>
-								<FolderOpen size={14} /> Open organized folder
-							</button>
-						) : null}
 					</div>
 					{batch?.companyContext ? (
 						<p className={styles.muted}>
@@ -899,7 +985,7 @@ export function ScreenshotBoard({ active }: Props) {
 								<section aria-label="Works well">
 									<h3>Works well</h3>
 									{analysis.readout.strengths.length ? (
-										analysis.readout.strengths.slice(0, 3).map(insightCard)
+										analysis.readout.strengths.slice(0, showAllFindings ? 3 : 1).map(insightCard)
 									) : (
 										<p className={styles.muted}>No supported strengths in these screens.</p>
 									)}
@@ -907,12 +993,22 @@ export function ScreenshotBoard({ active }: Props) {
 								<section aria-label="Creates friction">
 									<h3>Creates friction</h3>
 									{analysis.readout.frictions.length ? (
-										analysis.readout.frictions.slice(0, 3).map(insightCard)
+										analysis.readout.frictions.slice(0, showAllFindings ? 3 : 1).map(insightCard)
 									) : (
 										<p className={styles.muted}>No supported friction in these screens.</p>
 									)}
 								</section>
 							</div>
+							{extraFindingCount ? (
+								<button
+									type="button"
+									className={styles.textButton}
+									aria-expanded={showAllFindings}
+									onClick={() => setShowAllFindings((shown) => !shown)}
+								>
+									{showAllFindings ? "Fewer findings" : `More findings (${extraFindingCount})`}
+								</button>
+							) : null}
 							<h3 className={styles.nextStepHeading}>Recommended next step</h3>
 						</>
 					) : null}
@@ -972,88 +1068,141 @@ export function ScreenshotBoard({ active }: Props) {
 					) : null}
 				</section>
 			) : null}
-			{batch && batch.images.length > 1 ? (
-				<div className={styles.findScreens}>
-					<label className={styles.search}>
-						<Search size={14} aria-hidden="true" />
-						<input
-							type="search"
-							aria-label="Search screenshots"
-							placeholder="Find a screen or finding…"
-							value={query}
-							onChange={(event) => setQuery(event.target.value)}
-						/>
-					</label>
-					{allGroups.length > 1 ? (
-						<select
-							aria-label="Screen group"
-							value={groupFilter}
-							onChange={(event) => setGroupFilter(event.target.value)}
-						>
-							<option value="">All groups</option>
-							{allGroups.map((group) => (
-								<option key={group} value={group}>
-									{group}
-								</option>
-							))}
-						</select>
-					) : null}
-					{query || groupFilter ? (
-						<button
-							type="button"
-							className={styles.textButton}
-							onClick={() => {
-								setQuery("");
-								setGroupFilter("");
-							}}
-						>
-							Clear filters
-						</button>
-					) : null}
-					<span className={styles.muted} aria-live="polite">
-						{visibleImages.length} of {batch.images.length}
-					</span>
-				</div>
+			{batch ? (
+				<button
+					type="button"
+					className={styles.browseButton}
+					aria-expanded={libraryOpen}
+					aria-controls="screenshot-library"
+					onClick={() => {
+						if (!libraryOpen) {
+							setQuery("");
+							setGroupFilter("");
+							setLibraryPage(0);
+						}
+						setLibraryOpen((open) => !open);
+					}}
+				>
+					<ChevronRight size={13} aria-hidden="true" /> Browse {batch.images.length}{" "}
+					{batch.images.length === 1 ? "screen" : "screens"}
+				</button>
 			) : null}
-			{batch && !visibleImages.length ? (
-				<p className={styles.emptyResults}>
-					No screens match. Try another term or clear the filters.
-				</p>
-			) : null}
-			<div className={styles.groups}>
-				{[...groups].map(([group, images]) => (
-					<section key={group} aria-label={group}>
-						<h3>
-							{group}
-							<small>{images.length}</small>
-						</h3>
-						<div className={styles.grid}>
-							{images.map((image) => {
-								const screen = analysis?.screens.find((item) => item.imageId === image.id);
-								return (
-									<article key={image.id} className={styles.card}>
-										<button
-											type="button"
-											onClick={() => openEvidence(image.id)}
-											aria-label={`View ${screen?.label ?? image.originalName}`}
-										>
-											<img
-												src={toFileUrl(image.path)}
-												alt={screen?.label ?? image.originalName}
-												loading="lazy"
-											/>
-											<span>{screen?.label ?? image.originalName}</span>
-											{screen?.purpose ? (
-												<p className={styles.purposePreview}>{screen.purpose}</p>
-											) : null}
-										</button>
-									</article>
-								);
-							})}
+			{libraryOpen ? (
+				<section id="screenshot-library" aria-label="Screenshot library" className={styles.library}>
+					{batch && batch.images.length > 1 ? (
+						<div className={styles.findScreens}>
+							<label className={styles.search}>
+								<Search size={14} aria-hidden="true" />
+								<input
+									type="search"
+									aria-label="Search screenshots"
+									placeholder="Find a screen or finding…"
+									value={query}
+									onChange={(event) => {
+										setQuery(event.target.value);
+										setLibraryPage(0);
+									}}
+								/>
+							</label>
+							{allGroups.length > 1 ? (
+								<select
+									aria-label="Screen group"
+									value={groupFilter}
+									onChange={(event) => {
+										setGroupFilter(event.target.value);
+										setLibraryPage(0);
+									}}
+								>
+									<option value="">All groups</option>
+									{allGroups.map((group) => (
+										<option key={group} value={group}>
+											{group}
+										</option>
+									))}
+								</select>
+							) : null}
+							{query || groupFilter ? (
+								<button
+									type="button"
+									className={styles.textButton}
+									onClick={() => {
+										setQuery("");
+										setGroupFilter("");
+										setLibraryPage(0);
+									}}
+								>
+									Clear filters
+								</button>
+							) : null}
+							<span className={styles.muted} aria-live="polite">
+								{visibleImages.length} of {batch.images.length}
+							</span>
 						</div>
-					</section>
-				))}
-			</div>
+					) : null}
+					{batch && !visibleImages.length ? (
+						<p className={styles.emptyResults}>
+							No screens match. Try another term or clear the filters.
+						</p>
+					) : null}
+					<div className={styles.groups}>
+						{[...pageGroups].map(([group, images]) => (
+							<section key={group} aria-label={group}>
+								<h3>
+									{group}
+									<small>{images.length}</small>
+								</h3>
+								<div className={styles.grid}>
+									{images.map((image) => {
+										const screen = analysis?.screens.find((item) => item.imageId === image.id);
+										return (
+											<article key={image.id} className={styles.card}>
+												<button
+													type="button"
+													onClick={() => openEvidence(image.id)}
+													aria-label={`View ${screen?.label ?? image.originalName}`}
+												>
+													<img
+														src={toFileUrl(image.thumbnailPath ?? image.path)}
+														alt={screen?.label ?? image.originalName}
+														loading="lazy"
+													/>
+													<span>{screen?.label ?? image.originalName}</span>
+													{screen?.purpose ? (
+														<p className={styles.purposePreview}>{screen.purpose}</p>
+													) : null}
+												</button>
+											</article>
+										);
+									})}
+								</div>
+							</section>
+						))}
+					</div>
+					{pageCount > 1 ? (
+						<nav className={styles.pagination} aria-label="Screenshot pages">
+							<button
+								type="button"
+								className={styles.secondary}
+								disabled={currentPage === 0}
+								onClick={() => setLibraryPage(currentPage - 1)}
+							>
+								Previous page
+							</button>
+							<span aria-live="polite">
+								Page {currentPage + 1} of {pageCount}
+							</span>
+							<button
+								type="button"
+								className={styles.secondary}
+								disabled={currentPage + 1 >= pageCount}
+								onClick={() => setLibraryPage(currentPage + 1)}
+							>
+								Next page
+							</button>
+						</nav>
+					) : null}
+				</section>
+			) : null}
 			<Dialog
 				open={!!evidence}
 				onOpenChange={(open) => {

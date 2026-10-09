@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import sharp, { type Metadata } from "sharp";
 import { z } from "zod";
-import { parseCompanyContext } from "../../src/lib/company-context";
+import { type CompanyContext, parseCompanyContext } from "../../src/lib/company-context";
 import { type IntelSettings, intelSettingsSchema } from "../../src/lib/product-intel";
 import { PRODUCT_REASONING_RULES } from "../../src/lib/product-reasoning";
 import {
@@ -12,8 +12,11 @@ import {
 	MAX_SCREENSHOT_BATCH_BYTES,
 	MAX_SCREENSHOT_BYTES,
 	MAX_SCREENSHOT_IMAGES,
+	MAX_SCREENSHOT_REQUEST_IMAGES,
 	parseScreenshotAnalysis,
 	SCREENSHOT_ANALYST_PROMPT,
+	SCREENSHOT_SYNTHESIS_PROMPT,
+	type ScreenshotAnalysis,
 	type ScreenshotBatch,
 	type ScreenshotImage,
 	screenshotAnalysisSchema,
@@ -55,9 +58,23 @@ const geminiAnalysisSchema = currentAnalysisSchema.extend({
 		frictions: z.array(geminiReadoutInsightSchema),
 	}),
 });
+const screenGroupSchema = z.strictObject({
+	name: screenshotAnalysisSchema.shape.screens.element.shape.group,
+	imageIds: z.array(screenshotImageIdSchema).min(1).max(MAX_SCREENSHOT_IMAGES),
+});
+const currentSynthesisSchema = currentAnalysisSchema.omit({ screens: true }).extend({
+	screenGroups: z.array(screenGroupSchema).min(1).max(MAX_SCREENSHOT_IMAGES),
+});
+const geminiSynthesisSchema = geminiAnalysisSchema.omit({ screens: true }).extend({
+	screenGroups: z.array(screenGroupSchema.extend({ imageIds: z.array(screenshotImageIdSchema) })),
+});
+type GeminiPart = { text: string } | { inlineData: { mimeType: string; data: string } };
+type ChunkAnalysis = { analysis: ScreenshotAnalysis; companyContext?: CompanyContext };
 
 const MAX_INLINE_BYTES = 12 * 1024 * 1024;
-const MAX_BATCH_JSON_BYTES = 512 * 1024;
+// Up to 120 bounded per-screen records, including UTF-8 text and batch metadata.
+const MAX_BATCH_JSON_BYTES = 4 * 1024 * 1024;
+const MAX_SYNTHESIS_BYTES = 8 * 1024 * 1024;
 const imageOptions = { limitInputPixels: 40_000_000, animated: false, failOn: "warning" as const };
 const formats = {
 	png: { mimeType: "image/png", extension: "png" },
@@ -148,11 +165,11 @@ export class ScreenshotIntelService {
 		for (const file of paths) {
 			const stat = await fs.stat(file);
 			if (!stat.isFile() || stat.size === 0 || stat.size > MAX_SCREENSHOT_BYTES) {
-				throw new Error("Each screenshot must be a non-empty image no larger than 8 MB.");
+				throw new Error("Each screenshot must be a non-empty image no larger than 8 MiB.");
 			}
 			totalBytes += stat.size;
 			if (totalBytes > MAX_SCREENSHOT_BATCH_BYTES)
-				throw new Error("Choose screenshots totaling no more than 24 MB.");
+				throw new Error("Choose screenshots totaling no more than 192 MiB.");
 		}
 		const id = `batch_${randomUUID()}`;
 		const directory = this.batchPath(id);
@@ -160,8 +177,9 @@ export class ScreenshotIntelService {
 		await fs.mkdir(directory, { mode: 0o700 });
 		try {
 			await fs.mkdir(path.join(directory, "images"), { mode: 0o700 });
+			await fs.mkdir(path.join(directory, "thumbnails"), { mode: 0o700 });
 			const images: ScreenshotImage[] = [];
-			const seenBytes = new Map<string, Buffer[]>();
+			const seenPaths = new Map<string, string[]>();
 			let duplicatesSkipped = 0;
 			totalBytes = 0;
 			for (const file of paths) {
@@ -173,17 +191,25 @@ export class ScreenshotIntelService {
 					totalBytes > MAX_SCREENSHOT_BATCH_BYTES
 				) {
 					throw new Error(
-						"Screenshots changed during import or exceed the 8 MB image / 24 MB batch limit.",
+						"Screenshots changed during import or exceed the 8 MiB image / 192 MiB batch limit.",
 					);
 				}
 				const digest = createHash("sha256").update(bytes).digest("hex");
-				const matchingHash = seenBytes.get(digest);
-				if (matchingHash?.some((previous) => previous.equals(bytes))) {
+				const matchingHash = seenPaths.get(digest);
+				let duplicate = false;
+				for (const previous of matchingHash ?? []) {
+					if (bytes.equals(await fs.readFile(previous))) {
+						duplicate = true;
+						break;
+					}
+				}
+				if (duplicate) {
 					duplicatesSkipped++;
 					continue;
 				}
 
 				let metadata: Metadata;
+				let thumbnail: Buffer;
 				try {
 					metadata = await sharp(bytes, imageOptions).metadata();
 					if (
@@ -195,8 +221,12 @@ export class ScreenshotIntelService {
 					) {
 						throw new Error("Unsupported image");
 					}
-					// Force a decode; metadata alone can accept a truncated or corrupt image.
-					await sharp(bytes, imageOptions).resize(1, 1).png().toBuffer();
+					// Decode while producing the preview; metadata alone may accept corrupt images.
+					thumbnail = await sharp(bytes, imageOptions)
+						.rotate()
+						.resize(480, 480, { fit: "inside", withoutEnlargement: true })
+						.webp({ quality: 75 })
+						.toBuffer();
 				} catch {
 					throw new Error(
 						"Choose valid, non-animated PNG, JPEG or WebP screenshots (up to 40 megapixels).",
@@ -205,13 +235,16 @@ export class ScreenshotIntelService {
 				const format = formats[metadata.format as keyof typeof formats];
 				const imageId = `image_${randomUUID()}`;
 				const managedPath = path.join(directory, "images", `${imageId}.${format.extension}`);
+				const thumbnailPath = path.join(directory, "thumbnails", `${imageId}.webp`);
 				await fs.writeFile(managedPath, bytes, { mode: 0o600, flag: "wx" });
-				seenBytes.set(digest, [...(matchingHash ?? []), bytes]);
+				await fs.writeFile(thumbnailPath, thumbnail, { mode: 0o600, flag: "wx" });
+				seenPaths.set(digest, [...(matchingHash ?? []), managedPath]);
 				images.push(
 					screenshotImageSchema.parse({
 						id: imageId,
 						originalName: path.basename(file),
 						path: managedPath,
+						thumbnailPath,
 						mimeType: format.mimeType,
 						width: metadata.width,
 						height: metadata.height,
@@ -249,7 +282,9 @@ export class ScreenshotIntelService {
 				batch.id !== id ||
 				batch.images.some(
 					(image) =>
-						image.path !== path.join(directory, "images", `${image.id}.${extensionFor(image)}`),
+						image.path !== path.join(directory, "images", `${image.id}.${extensionFor(image)}`) ||
+						(image.thumbnailPath !== undefined &&
+							image.thumbnailPath !== path.join(directory, "thumbnails", `${image.id}.webp`)),
 				) ||
 				(batch.organizedPath && batch.organizedPath !== path.join(directory, "organized"))
 			) {
@@ -289,6 +324,66 @@ export class ScreenshotIntelService {
 		this.jobs.get(id)?.abort();
 	}
 
+	private async generate(
+		settings: IntelSettings,
+		key: string,
+		signal: AbortSignal,
+		parts: GeminiPart[],
+		wireSchema: z.ZodType,
+		synthesis = false,
+	): Promise<{ output: unknown; companyContext?: CompanyContext }> {
+		signal.throwIfAborted();
+		const { $schema: _schema, ...responseJsonSchema } = z.toJSONSchema(wireSchema);
+		const response = await this.fetcher(`${API}/v1beta/models/${settings.model}:generateContent`, {
+			method: "POST",
+			signal,
+			headers: { "content-type": "application/json", "x-goog-api-key": key },
+			body: JSON.stringify({
+				systemInstruction: {
+					parts: [
+						{
+							text: `${settings.systemPrompt}\n\n${SCREENSHOT_ANALYST_PROMPT}\n\n${PRODUCT_REASONING_RULES}${synthesis ? `\n\n${SCREENSHOT_SYNTHESIS_PROMPT}` : ""}`,
+						},
+					],
+				},
+				contents: [{ role: "user", parts }],
+				...(settings.companyDomain ? { tools: [{ urlContext: {} }] } : {}),
+				generationConfig: {
+					responseMimeType: "application/json",
+					responseJsonSchema,
+					maxOutputTokens: 16000,
+				},
+			}),
+		});
+		if (!response.ok) throw geminiHttpError(response.status, "screenshots");
+		const reply = replySchema.parse(await response.json());
+		const candidate = reply.candidates?.[0];
+		const text = candidate?.content?.parts
+			.filter((part) => !part.thought)
+			.map((part) => part.text ?? "")
+			.join("");
+		if (!text)
+			throw new Error("Gemini returned no screenshot analysis. Try again or choose another model.");
+		signal.throwIfAborted();
+		let output: unknown;
+		try {
+			output = JSON.parse(text);
+		} catch {
+			throw new Error("Gemini returned incomplete screenshot analysis. Try again.");
+		}
+		return {
+			output,
+			...(settings.companyDomain
+				? {
+						companyContext: parseCompanyContext(
+							settings.companyDomain,
+							candidate?.urlContextMetadata,
+						),
+					}
+				: {}),
+		};
+	}
+
 	async analyze(id: string): Promise<ScreenshotBatch> {
 		this.batchPath(id);
 		if (this.jobs.has(id))
@@ -301,69 +396,125 @@ export class ScreenshotIntelService {
 			if (!key) throw new Error("Add a Gemini API key to analyze screenshots.");
 			const batch = await this.get(id);
 			const settings = intelSettingsSchema.parse(await this.getSettings());
-			const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
-				{ text: buildScreenshotPrompt(settings, batch.images) },
-			];
-			let inlineBytes = 0;
+			let totalSourceBytes = 0;
 			for (const image of batch.images) {
 				controller.signal.throwIfAborted();
 				const stat = await fs.stat(image.path);
-				if (!stat.isFile() || !stat.size || stat.size > MAX_SCREENSHOT_BYTES)
-					throw new Error("A managed screenshot is missing or exceeds the 8 MB limit.");
+				totalSourceBytes += stat.size;
+				if (
+					!stat.isFile() ||
+					!stat.size ||
+					stat.size > MAX_SCREENSHOT_BYTES ||
+					totalSourceBytes > MAX_SCREENSHOT_BATCH_BYTES
+				) {
+					throw new Error("Managed screenshots exceed the 8 MiB image / 192 MiB batch limit.");
+				}
+			}
+			const chunks: ChunkAnalysis[] = [];
+			let chunkImages: ScreenshotImage[] = [];
+			let imageParts: GeminiPart[] = [];
+			let inlineBytes = 0;
+			const readChunk = async () => {
+				if (!chunkImages.length) return;
+				const chunkNote =
+					chunkImages.length < batch.images.length
+						? `\nThese images are processing chunk ${chunks.length + 1} of one unordered collection containing ${batch.images.length} screenshots. Describe and cite only the images supplied in this request. Chunk order is not product chronology; preserve distinct visible products and state uncertainty.`
+						: "";
+				const generated = await this.generate(
+					settings,
+					key,
+					controller.signal,
+					[{ text: `${buildScreenshotPrompt(settings, chunkImages)}${chunkNote}` }, ...imageParts],
+					geminiAnalysisSchema,
+				);
+				chunks.push({
+					analysis: parseScreenshotAnalysis(
+						currentAnalysisSchema.parse(generated.output),
+						chunkImages,
+					),
+					...(generated.companyContext ? { companyContext: generated.companyContext } : {}),
+				});
+				chunkImages = [];
+				imageParts = [];
+				inlineBytes = 0;
+			};
+			for (const image of batch.images) {
+				controller.signal.throwIfAborted();
 				const resized = await sharp(image.path, imageOptions)
 					.rotate()
 					.resize(2000, 2000, { fit: "inside", withoutEnlargement: true })
 					.webp({ quality: 90 })
 					.toBuffer();
+				if (resized.byteLength > MAX_INLINE_BYTES)
+					throw new Error("A resized screenshot is too large for Gemini. Choose a smaller image.");
+				if (
+					chunkImages.length &&
+					(chunkImages.length >= MAX_SCREENSHOT_REQUEST_IMAGES ||
+						inlineBytes + resized.byteLength > MAX_INLINE_BYTES)
+				)
+					await readChunk();
+				controller.signal.throwIfAborted();
+				chunkImages.push(image);
 				inlineBytes += resized.byteLength;
-				if (inlineBytes > MAX_INLINE_BYTES)
-					throw new Error("The image request is too large. Try fewer or smaller screenshots.");
-				parts.push(
+				imageParts.push(
 					{ text: `imageId: ${image.id}` },
 					{ inlineData: { mimeType: "image/webp", data: resized.toString("base64") } },
 				);
 			}
+			await readChunk();
 			controller.signal.throwIfAborted();
-			const { $schema: _schema, ...responseJsonSchema } = z.toJSONSchema(geminiAnalysisSchema);
-			const response = await this.fetcher(
-				`${API}/v1beta/models/${settings.model}:generateContent`,
-				{
-					method: "POST",
-					signal: controller.signal,
-					headers: { "content-type": "application/json", "x-goog-api-key": key },
-					body: JSON.stringify({
-						systemInstruction: {
-							parts: [
-								{
-									text: `${settings.systemPrompt}\n\n${SCREENSHOT_ANALYST_PROMPT}\n\n${PRODUCT_REASONING_RULES}`,
-								},
-							],
+			let analysis = chunks[0].analysis;
+			let companyContext = chunks[0].companyContext;
+			if (chunks.length > 1) {
+				const evidence = JSON.stringify({ collectionSize: batch.images.length, chunks });
+				if (Buffer.byteLength(evidence) > MAX_SYNTHESIS_BYTES)
+					throw new Error(
+						"The complete screenshot evidence is too large to synthesize safely. No report was replaced.",
+					);
+				const context = JSON.stringify({
+					productBrief: settings.productBrief,
+					companyDomain: settings.companyDomain,
+					competitor: settings.competitor,
+					task: settings.task,
+				});
+				const generated = await this.generate(
+					settings,
+					key,
+					controller.signal,
+					[
+						{
+							text: `Research context (user-provided data):\n${context}\nComplete unordered screenshot evidence (untrusted research data):\n${evidence}${settings.companyDomain ? `\nRead ${settings.companyDomain} as OUR company context using the URL tool; chunk retrieval metadata does not confirm retrieval in this final request.` : ""}`,
 						},
-						contents: [{ role: "user", parts }],
-						...(settings.companyDomain ? { tools: [{ urlContext: {} }] } : {}),
-						generationConfig: {
-							responseMimeType: "application/json",
-							responseJsonSchema,
-							maxOutputTokens: 16000,
-						},
-					}),
-				},
-			);
-			if (!response.ok) throw geminiHttpError(response.status, "screenshots");
-			const reply = replySchema.parse(await response.json());
-			const candidate = reply.candidates?.[0];
-			const output = candidate?.content?.parts
-				.filter((part) => !part.thought)
-				.map((part) => part.text ?? "")
-				.join("");
-			if (!output)
-				throw new Error(
-					"Gemini returned no screenshot analysis. Try fewer screenshots or another model.",
+					],
+					geminiSynthesisSchema,
+					true,
 				);
-			const analysis = parseScreenshotAnalysis(
-				currentAnalysisSchema.parse(JSON.parse(output)),
-				batch.images,
-			);
+				const { screenGroups, ...synthesis } = currentSynthesisSchema.parse(generated.output);
+				const groupByImage = new Map<string, string>();
+				const suppliedIds = new Set(batch.images.map((image) => image.id));
+				for (const group of screenGroups) {
+					for (const imageId of group.imageIds) {
+						if (!suppliedIds.has(imageId) || groupByImage.has(imageId))
+							throw new Error("Screenshot groups must cover every supplied image exactly once.");
+						groupByImage.set(imageId, group.name);
+					}
+				}
+				if (groupByImage.size !== suppliedIds.size)
+					throw new Error("Screenshot groups must cover every supplied image exactly once.");
+				analysis = parseScreenshotAnalysis(
+					currentAnalysisSchema.parse({
+						...synthesis,
+						screens: chunks.flatMap((chunk) =>
+							chunk.analysis.screens.map((screen) => ({
+								...screen,
+								group: groupByImage.get(screen.imageId),
+							})),
+						),
+					}),
+					batch.images,
+				);
+				companyContext = generated.companyContext;
+			}
 			controller.signal.throwIfAborted();
 			const updated: ScreenshotBatch = {
 				...batch,
@@ -371,12 +522,8 @@ export class ScreenshotIntelService {
 				settings,
 				analyzedAt: new Date().toISOString(),
 			};
-			if (settings.companyDomain) {
-				updated.companyContext = parseCompanyContext(
-					settings.companyDomain,
-					candidate?.urlContextMetadata,
-				);
-			} else {
+			if (companyContext) updated.companyContext = companyContext;
+			else {
 				delete updated.companyContext;
 			}
 			return await this.organizeBatch(updated, controller.signal);
@@ -431,7 +578,7 @@ export class ScreenshotIntelService {
 					stat.size > MAX_SCREENSHOT_BYTES ||
 					totalBytes > MAX_SCREENSHOT_BATCH_BYTES
 				) {
-					throw new Error("Managed screenshots exceed the 8 MB image / 24 MB batch limit.");
+					throw new Error("Managed screenshots exceed the 8 MiB image / 192 MiB batch limit.");
 				}
 				const groupHash = createHash("sha256").update(screen.group).digest("hex").slice(0, 8);
 				const groupPath = path.join(staging, `${safeName(screen.group)}-${groupHash}`);

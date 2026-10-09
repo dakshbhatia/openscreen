@@ -2,8 +2,13 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_INTEL_SETTINGS } from "./product-intel";
 import {
 	buildScreenshotPrompt,
+	MAX_SCREENSHOT_BATCH_BYTES,
+	MAX_SCREENSHOT_EVIDENCE_IMAGES,
+	MAX_SCREENSHOT_IMAGES,
+	MAX_SCREENSHOT_REQUEST_IMAGES,
 	parseScreenshotAnalysis,
 	SCREENSHOT_ANALYST_PROMPT,
+	SCREENSHOT_SYNTHESIS_PROMPT,
 	type ScreenshotAnalysis,
 	type ScreenshotDecision,
 	type ScreenshotImage,
@@ -12,6 +17,7 @@ import {
 	screenshotBatchIdSchema,
 	screenshotBatchSchema,
 	screenshotDecisionSchema,
+	screenshotImageSchema,
 	screenshotReadoutInsightSchema,
 	screenshotReadoutSchema,
 	screenshotUnderstandingSchema,
@@ -71,6 +77,62 @@ const insight: ScreenshotReadoutInsight = {
 };
 
 describe("screenshot intelligence contract", () => {
+	it("accepts a single 120-screen collection while retaining 24-image request and citation caps", () => {
+		expect(MAX_SCREENSHOT_IMAGES).toBe(120);
+		expect(MAX_SCREENSHOT_REQUEST_IMAGES).toBe(24);
+		expect(MAX_SCREENSHOT_EVIDENCE_IMAGES).toBe(24);
+		expect(MAX_SCREENSHOT_BATCH_BYTES).toBe(192 * 1024 * 1024);
+		const bulkImages = Array.from({ length: 120 }, (_, index) => ({
+			...images[0],
+			id: `image_00000000-0000-0000-0000-${String(index).padStart(12, "0")}`,
+		}));
+		const bulkAnalysis = {
+			...analysis,
+			screens: bulkImages.map((image) => ({ ...analysis.screens[0], imageId: image.id })),
+		};
+		expect(parseScreenshotAnalysis(bulkAnalysis, bulkImages).screens).toHaveLength(120);
+		const batch = {
+			id: "batch_00000000-0000-0000-0000-000000000001",
+			title: "Bulk",
+			createdAt: new Date().toISOString(),
+			images: bulkImages,
+			analysis: bulkAnalysis,
+		};
+		expect(screenshotBatchSchema.parse(batch).images).toHaveLength(120);
+		expect(
+			screenshotBatchSchema.safeParse({ ...batch, images: [...bulkImages, images[1]] }).success,
+		).toBe(false);
+	});
+	it("grounds synthesis in every unordered chunk and preserves uncertainty between distinct products", () => {
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain("multiple products");
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain("Disambiguate group names");
+		expect(SCREENSHOT_SYNTHESIS_PROMPT).toContain("every screenshot's evidence");
+		expect(SCREENSHOT_SYNTHESIS_PROMPT).toContain("1 to 24 unique evidenceImageIds");
+		expect(SCREENSHOT_SYNTHESIS_PROMPT).toContain("Do not repeat a screens array");
+		expect(SCREENSHOT_SYNTHESIS_PROMPT).toContain("never chronological steps");
+		expect(SCREENSHOT_SYNTHESIS_PROMPT).toContain(
+			"screenGroups assigns canonical group names across the whole collection",
+		);
+		expect(SCREENSHOT_SYNTHESIS_PROMPT).toContain("Merge equivalent labels");
+		expect(SCREENSHOT_SYNTHESIS_PROMPT).toContain("Do not split groups by processing chunk");
+		for (const prompt of [SCREENSHOT_ANALYST_PROMPT, SCREENSHOT_SYNTHESIS_PROMPT]) {
+			expect(prompt).toContain("basis applies to its entire reason");
+			expect(prompt).toContain(
+				"A visible button does not prove a working action or absence of dead ends",
+			);
+		}
+	});
+
+	it("keeps thumbnail paths optional for legacy images and bounds new metadata", () => {
+		expect(screenshotImageSchema.parse(images[0])).not.toHaveProperty("thumbnailPath");
+		expect(
+			screenshotImageSchema.parse({ ...images[0], thumbnailPath: "/managed/thumbnail.webp" })
+				.thumbnailPath,
+		).toBe("/managed/thumbnail.webp");
+		for (const thumbnailPath of ["", "x".repeat(4097)])
+			expect(screenshotImageSchema.safeParse({ ...images[0], thumbnailPath }).success).toBe(false);
+	});
+
 	it("requires exactly one evidence entry per supplied screenshot and preserves returned order", () => {
 		const raw = { ...analysis, screens: [...analysis.screens].reverse() };
 		expect(parseScreenshotAnalysis(raw, images).screens.map((screen) => screen.imageId)).toEqual(
@@ -339,6 +401,11 @@ describe("screenshot intelligence contract", () => {
 			"product and job each need only one plain sentence",
 		);
 		expect(SCREENSHOT_ANALYST_PROMPT).toContain("purpose in one sentence");
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain(
+			"Onboarding, Overview, Core work, Detail, Collaboration, Billing or Settings",
+		);
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain("Do not force these categories");
+		expect(SCREENSHOT_ANALYST_PROMPT).toContain("Use plain words without PM jargon");
 		expect(SCREENSHOT_ANALYST_PROMPT).toContain("prefer one or two strongly supported insights");
 		expect(SCREENSHOT_ANALYST_PROMPT).toContain("one-sentence reason");
 		expect(SCREENSHOT_ANALYST_PROMPT).toContain("Empty arrays are appropriate");

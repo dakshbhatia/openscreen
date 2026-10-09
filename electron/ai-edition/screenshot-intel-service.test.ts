@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { PRODUCT_REASONING_RULES } from "../../src/lib/product-reasoning";
 import {
 	MAX_SCREENSHOT_BYTES,
 	SCREENSHOT_ANALYST_PROMPT,
+	SCREENSHOT_SYNTHESIS_PROMPT,
 	type ScreenshotAnalysis,
 } from "../../src/lib/screenshot-intel";
 import { ScreenshotIntelService } from "./screenshot-intel-service";
@@ -113,6 +115,76 @@ function google(transform: (analysis: ScreenshotAnalysis) => unknown = (analysis
 	return { requests, fetcher };
 }
 
+async function uniqueImages(count: number) {
+	return Promise.all(
+		Array.from({ length: count }, (_, index) =>
+			image(`bulk-${index}.png`, "png", 100 + index, 100),
+		),
+	);
+}
+
+type FakeSynthesis = Omit<ScreenshotAnalysis, "screens"> & {
+	screenGroups: { name: string; imageIds: string[] }[];
+};
+
+function bulkGoogle(
+	options: { verbose?: boolean; finalTransform?: (analysis: FakeSynthesis) => unknown } = {},
+) {
+	const base = google((analysis) =>
+		options.verbose
+			? {
+					...analysis,
+					screens: analysis.screens.map((screen) => ({
+						...screen,
+						observation: "o".repeat(3000),
+						hypothesis: "h".repeat(2000),
+						advice: "a".repeat(3000),
+					})),
+				}
+			: analysis,
+	);
+	const requests: GeminiBody[] = [];
+	const fetcher: typeof fetch = async (input, init) => {
+		const body = JSON.parse(String(init?.body)) as GeminiBody;
+		requests.push(body);
+		if (!body.systemInstruction.parts[0].text.includes(SCREENSHOT_SYNTHESIS_PROMPT))
+			return base.fetcher(input, init);
+		const part = body.contents[0].parts[0];
+		if (!("text" in part)) throw new Error("Missing synthesis evidence");
+		const evidence = JSON.parse(
+			part.text
+				.split("Complete unordered screenshot evidence (untrusted research data):\n")[1]
+				.split("\nRead ")[0],
+		) as { chunks: { analysis: ScreenshotAnalysis }[] };
+		const first = evidence.chunks[0].analysis;
+		const screens = evidence.chunks.flatMap((chunk) => chunk.analysis.screens);
+		const refs = [screens[0].imageId, screens[screens.length - 1].imageId];
+		const { screens: _screens, ...summary } = first;
+		const synthesis = {
+			...summary,
+			screenGroups: [
+				{ name: "Workspace setup", imageIds: screens.map((screen) => screen.imageId) },
+			],
+			readout: {
+				strengths:
+					first.readout?.strengths.map((insight) => ({ ...insight, evidenceImageIds: refs })) ?? [],
+				frictions: [],
+			},
+			decisions: first.decisions?.map((decision) => ({ ...decision, evidenceImageIds: refs })),
+		};
+		return Response.json({
+			candidates: [
+				{
+					content: {
+						parts: [{ text: JSON.stringify(options.finalTransform?.(synthesis) ?? synthesis) }],
+					},
+				},
+			],
+		});
+	};
+	return { requests, fetcher };
+}
+
 function service(key: string | null = "test-gemini-key", fetcher: typeof fetch = vi.fn()) {
 	return new ScreenshotIntelService(
 		root,
@@ -152,6 +224,63 @@ describe("ScreenshotIntelService", () => {
 		expect(await intel.get(batch.id)).toEqual(batch);
 		expect(await intel.list()).toEqual([batch]);
 	});
+	it("creates bounded WebP thumbnails without source metadata or changes to originals", async () => {
+		const file = path.join(originals, "large-metadata.png");
+		await sharp({ create: { width: 1600, height: 800, channels: 3, background: "#25405f" } })
+			.withMetadata({ density: 300 })
+			.png()
+			.toFile(file);
+		const before = await fs.readFile(file);
+		const intel = service();
+		const batch = await intel.import([file]);
+		const imported = batch.images[0];
+		expect(imported.thumbnailPath).toBe(
+			path.join(root, "screenshot-intel", batch.id, "thumbnails", `${imported.id}.webp`),
+		);
+		const preview = await sharp(imported.thumbnailPath).metadata();
+		expect(preview.format).toBe("webp");
+		expect(preview.width).toBe(480);
+		expect(preview.height).toBe(240);
+		expect(preview.exif).toBeUndefined();
+		expect(preview.icc).toBeUndefined();
+		expect(await fs.readFile(file)).toEqual(before);
+		expect(await fs.readFile(imported.path)).toEqual(before);
+		expect(await intel.get(batch.id)).toEqual(batch);
+	});
+	it("accepts legacy batches without thumbnails and rejects disk-edited thumbnail paths", async () => {
+		const intel = service();
+		const batch = await intel.import([await image()]);
+		const file = path.join(root, "screenshot-intel", batch.id, "batch.json");
+		const { thumbnailPath: _thumbnail, ...legacyImage } = batch.images[0];
+		const legacy = { ...batch, images: [legacyImage] };
+		await fs.writeFile(file, JSON.stringify(legacy));
+		expect(await intel.get(batch.id)).toEqual(legacy);
+		for (const thumbnailPath of [
+			path.join(originals, "secret.webp"),
+			path.join(root, "screenshot-intel", batch.id, "thumbnails", "other.webp"),
+		]) {
+			await fs.writeFile(
+				file,
+				JSON.stringify({ ...batch, images: [{ ...batch.images[0], thumbnailPath }] }),
+			);
+			await expect(intel.get(batch.id)).rejects.toThrow(/could not be read/);
+		}
+	});
+	it("rolls back images and thumbnails together if thumbnail persistence fails", async () => {
+		const originalWrite = fs.writeFile;
+		vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+			if (typeof file === "string" && file.includes(`${path.sep}thumbnails${path.sep}`))
+				throw new Error("thumbnail disk full");
+			return originalWrite(file, data, options);
+		});
+		const source = await image();
+		const intel = service();
+		await expect(intel.import([source])).rejects.toThrow(/thumbnail disk full/);
+		expect(await fs.readdir(path.join(root, "screenshot-intel"))).toEqual([]);
+		expect(await intel.list()).toEqual([]);
+		expect((await sharp(source).metadata()).format).toBe("png");
+	});
+
 	it("skips exact byte duplicates, preserves the first image and originals, and analyzes only survivors", async () => {
 		const first = await image("first.png");
 		const duplicate = path.join(originals, "duplicate.png");
@@ -167,6 +296,9 @@ describe("ScreenshotIntelService", () => {
 		expect(batch.duplicatesSkipped).toBe(2);
 		expect(batch.images.map((item) => item.originalName)).toEqual(["first.png", "unique.png"]);
 		expect(await fs.readdir(path.dirname(batch.images[0].path))).toHaveLength(2);
+		expect(
+			await fs.readdir(path.join(root, "screenshot-intel", batch.id, "thumbnails")),
+		).toHaveLength(2);
 		expect(await Promise.all(paths.map((file) => fs.readFile(file)))).toEqual(before);
 		expect((await intel.get(batch.id)).duplicatesSkipped).toBe(2);
 		const result = await intel.analyze(batch.id);
@@ -221,23 +353,267 @@ describe("ScreenshotIntelService", () => {
 	it("caps image count, duplicate inputs, individual bytes and total batch bytes before copying", async () => {
 		const valid = await image();
 		const intel = service();
-		await expect(intel.import([])).rejects.toThrow(/1 to 24/);
-		await expect(intel.import(Array.from({ length: 25 }, () => valid))).rejects.toThrow(/1 to 24/);
+		await expect(intel.import([])).rejects.toThrow(/1 to 120/);
+		await expect(intel.import(Array.from({ length: 121 }, () => valid))).rejects.toThrow(
+			/1 to 120/,
+		);
 		await expect(intel.import([valid, valid])).rejects.toThrow(/only once/);
 		const large = path.join(originals, "large.png");
 		await fs.writeFile(large, "");
 		await fs.truncate(large, MAX_SCREENSHOT_BYTES + 1);
-		await expect(intel.import([large])).rejects.toThrow(/8 MB/);
+		await expect(intel.import([large])).rejects.toThrow(/8 MiB/);
 		const many = [];
-		for (let index = 0; index < 4; index++) {
+		for (let index = 0; index < 25; index++) {
 			const file = path.join(originals, `large-${index}.png`);
 			await fs.writeFile(file, "");
 			await fs.truncate(file, MAX_SCREENSHOT_BYTES);
 			many.push(file);
 		}
-		await expect(intel.import(many)).rejects.toThrow(/24 MB/);
+		await expect(intel.import(many)).rejects.toThrow(/192 MiB/);
 		expect(await intel.list()).toEqual([]);
 	});
+	it("covers all 120 unique images in five bounded chunks and one grounded synthesis without repeating screens", async () => {
+		const { fetcher, requests } = bulkGoogle({ verbose: true });
+		const intel = service("private-key", fetcher);
+		const batch = await intel.import(await uniqueImages(120));
+		expect(batch.images).toHaveLength(120);
+		const result = await intel.analyze(batch.id);
+		expect(requests).toHaveLength(6);
+		const sentIds: string[] = [];
+		for (const request of requests.slice(0, -1)) {
+			const parts = request.contents[0].parts;
+			const inline = parts.flatMap((part) => ("inlineData" in part ? [part.inlineData] : []));
+			expect(inline).toHaveLength(24);
+			expect(
+				inline.reduce((bytes, part) => bytes + Buffer.from(part.data, "base64").byteLength, 0),
+			).toBeLessThanOrEqual(12 * 1024 * 1024);
+			sentIds.push(
+				...parts.flatMap((part) =>
+					"text" in part && part.text.startsWith("imageId: ") ? [part.text.slice(9)] : [],
+				),
+			);
+			expect(JSON.stringify(request.generationConfig.responseJsonSchema)).not.toMatch(
+				/minItems|maxItems/,
+			);
+		}
+		expect(sentIds).toEqual(batch.images.map((entry) => entry.id));
+		expect(result.analysis?.screens.map((screen) => screen.imageId)).toEqual(sentIds);
+		expect(
+			result.analysis?.screens.every((screen) => screen.purpose?.includes("recognizable home")),
+		).toBe(true);
+		const synthesis = requests[5];
+		expect(synthesis.contents[0].parts).toHaveLength(1);
+		expect(synthesis.generationConfig.responseJsonSchema).toEqual(
+			expect.objectContaining({
+				required: expect.arrayContaining([
+					"summary",
+					"understanding",
+					"readout",
+					"decisions",
+					"unknowns",
+					"screenGroups",
+				]),
+			}),
+		);
+		expect(JSON.stringify(synthesis.generationConfig.responseJsonSchema)).not.toMatch(
+			/"screens"|minItems|maxItems/,
+		);
+		expect(JSON.stringify(synthesis)).not.toContain(root);
+		expect(JSON.stringify(synthesis)).not.toContain("private-key");
+		for (const id of sentIds) expect(JSON.stringify(synthesis.contents)).toContain(id);
+		const crossChunkRefs = [sentIds[0], sentIds[119]];
+		expect(result.analysis?.decisions?.[0].evidenceImageIds).toEqual(crossChunkRefs);
+		expect(result.analysis?.readout?.strengths[0].evidenceImageIds).toEqual(crossChunkRefs);
+		expect(new Set(result.analysis?.screens.map((screen) => screen.group))).toEqual(
+			new Set(["Workspace setup"]),
+		);
+		expect(result.analysis).not.toHaveProperty("screenGroups");
+		const metadata = path.join(root, "screenshot-intel", batch.id, "batch.json");
+		expect((await fs.stat(metadata)).size).toBeGreaterThan(512 * 1024);
+		expect(await intel.get(batch.id)).toEqual(result);
+		expect(await intel.list()).toHaveLength(1);
+	});
+	it("splits even a small image count when resized payloads exceed the request byte budget", async () => {
+		const paths = [];
+		for (let index = 0; index < 8; index++) {
+			const file = path.join(originals, `noise-${index}.png`);
+			await sharp(randomBytes(1600 * 1600 * 3), { raw: { width: 1600, height: 1600, channels: 3 } })
+				.png()
+				.toFile(file);
+			paths.push(file);
+		}
+		const { fetcher, requests } = bulkGoogle();
+		const intel = service("key", fetcher);
+		const batch = await intel.import(paths);
+		const result = await intel.analyze(batch.id);
+		expect(requests.length).toBeGreaterThan(2);
+		const counts: number[] = [];
+		for (const request of requests.slice(0, -1)) {
+			const inline = request.contents[0].parts.flatMap((part) =>
+				"inlineData" in part ? [part.inlineData] : [],
+			);
+			counts.push(inline.length);
+			expect(
+				inline.reduce((total, part) => total + Buffer.from(part.data, "base64").byteLength, 0),
+			).toBeLessThanOrEqual(12 * 1024 * 1024);
+		}
+		expect(counts.reduce((total, count) => total + count, 0)).toBe(8);
+		expect(result.analysis?.screens).toHaveLength(8);
+	}, 15000);
+
+	it("rejects phantom references in the final synthesis without saving partial chunk reports", async () => {
+		const { fetcher, requests } = bulkGoogle({
+			finalTransform: (analysis) => ({
+				...analysis,
+				readout: {
+					strengths: [
+						{
+							...analysis.readout?.strengths[0],
+							evidenceImageIds: ["image_00000000-0000-0000-0000-000000000099"],
+						},
+					],
+					frictions: [],
+				},
+			}),
+		});
+		const intel = service("key", fetcher);
+		const batch = await intel.import(await uniqueImages(25));
+		await expect(intel.analyze(batch.id)).rejects.toThrow(/supplied/i);
+		expect(requests).toHaveLength(3);
+		expect(await intel.get(batch.id)).toEqual(batch);
+	});
+	it.each([
+		"missing",
+		"omitted image",
+		"repeated within group",
+		"repeated across groups",
+		"phantom",
+		"empty group",
+		"too many groups",
+		"too many IDs",
+		"long name",
+	])("rejects invalid canonical grouping (%s) and preserves the previous complete report", async (kind) => {
+		let invalid = false;
+		const base = bulkGoogle({
+			finalTransform: (analysis) => {
+				if (!invalid) return analysis;
+				const group = analysis.screenGroups[0];
+				const ids = group.imageIds;
+				if (kind === "missing") {
+					const { screenGroups: _groups, ...missing } = analysis;
+					return missing;
+				}
+				const screenGroups =
+					kind === "omitted image"
+						? [{ ...group, imageIds: ids.slice(1) }]
+						: kind === "repeated within group"
+							? [{ ...group, imageIds: [...ids, ids[0]] }]
+							: kind === "repeated across groups"
+								? [group, { name: "Other", imageIds: [ids[0]] }]
+								: kind === "phantom"
+									? [
+											{
+												...group,
+												imageIds: [...ids.slice(1), "image_00000000-0000-0000-0000-000000000099"],
+											},
+										]
+									: kind === "empty group"
+										? [{ ...group, imageIds: [] }]
+										: kind === "too many groups"
+											? Array.from({ length: 121 }, () => ({ name: "Setup", imageIds: [ids[0]] }))
+											: kind === "too many IDs"
+												? [{ ...group, imageIds: Array.from({ length: 121 }, () => ids[0]) }]
+												: [{ ...group, name: "x".repeat(81) }];
+				return { ...analysis, screenGroups };
+			},
+		});
+		const intel = service("key", base.fetcher);
+		const batch = await intel.import(await uniqueImages(25));
+		const previous = await intel.analyze(batch.id);
+		const copies = await fs.readdir(previous.organizedPath ?? "", { recursive: true });
+		invalid = true;
+		await expect(intel.analyze(batch.id)).rejects.toThrow();
+		expect(await intel.get(batch.id)).toEqual(previous);
+		expect(await fs.readdir(previous.organizedPath ?? "", { recursive: true })).toEqual(copies);
+	});
+
+	it.each([2, 3])("preserves an old complete report if bulk request %s fails", async (failAt) => {
+		const base = bulkGoogle();
+		let calls = 0;
+		let failure = false;
+		const intel = service("key", async (input, init) => {
+			calls++;
+			if (failure && calls === failAt)
+				return new Response("private provider text", { status: 503 });
+			return base.fetcher(input, init);
+		});
+		const batch = await intel.import(await uniqueImages(25));
+		const original = await intel.analyze(batch.id);
+		const copies = await fs.readdir(original.organizedPath ?? "", { recursive: true });
+		failure = true;
+		calls = 0;
+		await expect(intel.analyze(batch.id)).rejects.toThrow(/HTTP 503/);
+		expect(await intel.get(batch.id)).toEqual(original);
+		expect(await fs.readdir(original.organizedPath ?? "", { recursive: true })).toEqual(copies);
+	});
+	it.each([
+		2, 3,
+	])("cancels bulk request %s using the shared signal and saves no partial report", async (stopAt) => {
+		const base = bulkGoogle();
+		const signals: (AbortSignal | null | undefined)[] = [];
+		const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+			signals.push(init?.signal);
+			if (signals.length === stopAt)
+				return new Promise((_resolve, reject) => {
+					init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+						once: true,
+					});
+				});
+			return base.fetcher(input, init);
+		});
+		const intel = service("key", fetcher);
+		const batch = await intel.import(await uniqueImages(25));
+		const pending = intel.analyze(batch.id);
+		const rejected = expect(pending).rejects.toThrow(/cancelled/i);
+		await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(stopAt));
+		intel.cancel(batch.id);
+		await rejected;
+		expect(new Set(signals).size).toBe(1);
+		expect(signals[0]?.aborted).toBe(true);
+		expect(await intel.get(batch.id)).toEqual(batch);
+	});
+	it.each([
+		true,
+		false,
+	])("uses final-request website provenance rather than earlier chunk retrieval (final retrieved=%s)", async (retrieved) => {
+		const base = bulkGoogle();
+		const intel = new ScreenshotIntelService(
+			root,
+			async () => ({ ...DEFAULT_INTEL_SETTINGS, companyDomain: "https://example.com" }),
+			() => "key",
+			async (input, init) => {
+				const response = await base.fetcher(input, init);
+				const raw = (await response.json()) as { candidates: { urlContextMetadata?: unknown }[] };
+				if (base.requests.length < 3 || retrieved)
+					raw.candidates[0].urlContextMetadata = {
+						urlMetadata: [
+							{
+								retrievedUrl: "https://example.com/about",
+								urlRetrievalStatus: "URL_RETRIEVAL_STATUS_SUCCESS",
+							},
+						],
+					};
+				return Response.json(raw);
+			},
+		);
+		const batch = await intel.import(await uniqueImages(25));
+		const result = await intel.analyze(batch.id);
+		expect(result.companyContext?.status).toBe(retrieved ? "retrieved" : "unavailable");
+		expect(result.companyContext?.sourceUrls).toEqual(
+			retrieved ? ["https://example.com/about"] : [],
+		);
+	});
+
 	it("does not send images without a Gemini key", async () => {
 		const { fetcher, requests } = google();
 		const intel = service(null, fetcher);
@@ -525,6 +901,7 @@ describe("ScreenshotIntelService", () => {
 		expect(await fs.readdir(path.join(root, "screenshot-intel", batch.id))).toEqual([
 			"batch.json",
 			"images",
+			"thumbnails",
 		]);
 	});
 	it("sanitizes AI names and groups and prevents naming collisions", async () => {
@@ -625,6 +1002,7 @@ describe("ScreenshotIntelService", () => {
 			"batch.json",
 			"images",
 			"organized",
+			"thumbnails",
 		]);
 	});
 });

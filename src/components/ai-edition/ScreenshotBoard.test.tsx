@@ -78,17 +78,28 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
+function openMore() {
+	const summary = screen.getByText("More", { selector: "summary" });
+	if (!summary.parentElement?.hasAttribute("open")) fireEvent.click(summary);
+}
+async function browseScreens() {
+	const button = await screen.findByRole("button", { name: /^Browse \d+ screens?$/ });
+	if (button.getAttribute("aria-expanded") !== "true") fireEvent.click(button);
+}
+
 async function importBatch() {
 	render(<ScreenshotBoard active />);
-	const add = await screen.findByRole("button", { name: "Add screenshots" });
+	const add = await screen.findByRole("button", { name: "Choose screenshots" });
 	await waitFor(() => expect(add).toBeEnabled());
 	fireEvent.click(add);
+	await browseScreens();
 	await screen.findByRole("button", { name: "View Capture 1.png" });
 }
 
 async function loadExistingBatch() {
 	vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([batch]);
 	render(<ScreenshotBoard active />);
+	await browseScreens();
 	await screen.findByRole("button", { name: "View Capture 1.png" });
 }
 
@@ -105,6 +116,7 @@ describe("ScreenshotBoard", () => {
 	});
 	it("saves exact product context and shows grouped AI names, three advices and enlarged evidence", async () => {
 		await loadExistingBatch();
+		openMore();
 		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
 		fireEvent.change(screen.getByLabelText("Our product"), {
 			target: { value: "Our quirky product words." },
@@ -134,11 +146,12 @@ describe("ScreenshotBoard", () => {
 		vi.stubGlobal("electronAPI", { getPathForFile: vi.fn((file: File) => `/tmp/${file.name}`) });
 		render(<ScreenshotBoard active />);
 		await waitFor(() =>
-			expect(screen.getByRole("button", { name: "Add screenshots" })).toBeEnabled(),
+			expect(screen.getByRole("button", { name: "Choose screenshots" })).toBeEnabled(),
 		);
 		fireEvent.drop(screen.getByRole("region", { name: "Screenshot research" }), {
 			dataTransfer: { files: [new File(["pixels"], "one.png", { type: "image/png" })] },
 		});
+		await browseScreens();
 		await screen.findByRole("button", { name: "View AI name 1" });
 		expect(nativeBridgeClient.screenshotIntel.import).toHaveBeenCalledWith(["/tmp/one.png"]);
 		expect(nativeBridgeClient.screenshotIntel.analyze).toHaveBeenCalledExactlyOnceWith(batch.id);
@@ -185,6 +198,7 @@ describe("ScreenshotBoard", () => {
 		render(<ScreenshotBoard active />);
 		await screen.findByText("Setup uses focused choices.");
 		expect(screen.queryByRole("note")).not.toBeInTheDocument();
+		openMore();
 		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
 		fireEvent.change(screen.getByLabelText("Our product"), { target: { value: "New context" } });
 		expect(screen.getByRole("note")).toHaveTextContent("Context changed");
@@ -227,12 +241,12 @@ describe("ScreenshotBoard", () => {
 		});
 		render(<ScreenshotBoard active />);
 		await waitFor(() =>
-			expect(screen.getByRole("button", { name: "Add screenshots" })).toBeEnabled(),
+			expect(screen.getByRole("button", { name: "Choose screenshots" })).toBeEnabled(),
 		);
-		expect(screen.getByRole("button", { name: "Analyze screenshots" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Analyze screenshots" })).not.toBeInTheDocument();
 		expect(screen.getByLabelText("Gemini API key")).not.toBeVisible();
 	});
-	it("automatically analyzes a newly picked batch with current context while showing the imported images", async () => {
+	it("automatically analyzes a newly picked batch with exact current context and sources collapsed", async () => {
 		let finish: ((result: ScreenshotBatch) => void) | undefined;
 		vi.mocked(nativeBridgeClient.screenshotIntel.analyze).mockImplementationOnce(
 			() =>
@@ -242,25 +256,33 @@ describe("ScreenshotBoard", () => {
 		);
 		render(<ScreenshotBoard active />);
 		await waitFor(() =>
-			expect(screen.getByRole("button", { name: "Add screenshots" })).toBeEnabled(),
+			expect(screen.getByRole("button", { name: "Choose screenshots" })).toBeEnabled(),
 		);
+		openMore();
 		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
 		fireEvent.change(screen.getByLabelText("Our product"), {
 			target: { value: "Our exact current context" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "Add screenshots" }));
-		await screen.findByRole("button", { name: "View Capture 1.png" });
+		fireEvent.click(screen.getByRole("button", { name: "Choose screenshots" }));
+		await screen.findByRole("button", { name: "Browse 4 screens" });
+		expect(screen.getByRole("button", { name: "Browse 4 screens" })).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
+		expect(screen.queryByRole("region", { name: "Screenshot library" })).not.toBeInTheDocument();
 		await waitFor(() =>
 			expect(nativeBridgeClient.screenshotIntel.analyze).toHaveBeenCalledExactlyOnceWith(batch.id),
 		);
 		expect(nativeBridgeClient.productIntel.saveSettings).toHaveBeenCalledWith(
 			expect.objectContaining({ productBrief: "Our exact current context" }),
 		);
-		expect(screen.getByRole("button", { name: "Analyzing screenshots…" })).toBeDisabled();
+		expect(screen.getByRole("status")).toHaveTextContent("Analyzing screenshots…");
+		expect(screen.queryByRole("button", { name: "Analyze screenshots" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
 		finish?.(analyzed);
 		await screen.findByText("Setup uses focused choices.");
 		expect(screen.getByRole("button", { name: "Open organized folder" })).toBeVisible();
+		expect(screen.queryByRole("region", { name: "Screenshot library" })).not.toBeInTheDocument();
 	});
 	it("does not analyze restored or selected recent batches", async () => {
 		const other = {
@@ -271,6 +293,7 @@ describe("ScreenshotBoard", () => {
 		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([batch, other]);
 		vi.mocked(nativeBridgeClient.screenshotIntel.get).mockResolvedValue(other);
 		render(<ScreenshotBoard active />);
+		await browseScreens();
 		await screen.findByRole("button", { name: "View Capture 1.png" });
 		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByText("More", { selector: "summary" }));
@@ -283,12 +306,12 @@ describe("ScreenshotBoard", () => {
 		vi.mocked(nativeBridgeClient.screenshotIntel.pick).mockResolvedValue(null);
 		render(<ScreenshotBoard active />);
 		await waitFor(() =>
-			expect(screen.getByRole("button", { name: "Add screenshots" })).toBeEnabled(),
+			expect(screen.getByRole("button", { name: "Choose screenshots" })).toBeEnabled(),
 		);
-		fireEvent.click(screen.getByRole("button", { name: "Add screenshots" }));
+		fireEvent.click(screen.getByRole("button", { name: "Choose screenshots" }));
 		await waitFor(() => expect(nativeBridgeClient.screenshotIntel.pick).toHaveBeenCalledOnce());
 		await waitFor(() =>
-			expect(screen.getByRole("button", { name: "Add screenshots" })).toBeEnabled(),
+			expect(screen.getByRole("button", { name: "Choose screenshots" })).toBeEnabled(),
 		);
 		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
 		expect(nativeBridgeClient.productIntel.saveSettings).not.toHaveBeenCalled();
@@ -298,6 +321,7 @@ describe("ScreenshotBoard", () => {
 		vi.mocked(nativeBridgeClient.productIntel.saveSettings).mockRejectedValueOnce(
 			new Error("Disk unavailable"),
 		);
+		openMore();
 		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
 		fireEvent.change(screen.getByLabelText("Our product"), {
 			target: { value: "Our words, untouched!!" },
@@ -321,7 +345,8 @@ describe("ScreenshotBoard", () => {
 		});
 		await loadExistingBatch();
 		expect(screen.getByLabelText("Our product")).not.toBeVisible();
-		expect(screen.getByText("My product — quirks intact.", { selector: "p" })).toBeVisible();
+		expect(screen.getByText("My product — quirks intact.", { selector: "p" })).not.toBeVisible();
+		openMore();
 		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
 		expect(screen.getByLabelText("Our product")).toBeVisible();
 		expect(screen.getByLabelText("Our product")).toHaveValue("My product — quirks intact.");
@@ -329,6 +354,7 @@ describe("ScreenshotBoard", () => {
 	it("searches finding text, intersects group filters and clears back to all screens", async () => {
 		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([analyzed]);
 		render(<ScreenshotBoard active />);
+		await browseScreens();
 		await screen.findByRole("button", { name: "View AI name 1" });
 		fireEvent.change(screen.getByRole("searchbox", { name: "Search screenshots" }), {
 			target: { value: "Advice 4" },
@@ -345,6 +371,7 @@ describe("ScreenshotBoard", () => {
 	it("navigates only filtered evidence with arrows and keeps hypotheses beside the source", async () => {
 		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([analyzed]);
 		render(<ScreenshotBoard active />);
+		await browseScreens();
 		await screen.findByRole("button", { name: "View AI name 1" });
 		fireEvent.change(screen.getByLabelText("Screen group"), { target: { value: "Workspace" } });
 		fireEvent.click(screen.getByRole("button", { name: "View AI name 3" }));
@@ -369,9 +396,11 @@ describe("ScreenshotBoard", () => {
 			},
 		});
 		render(<ScreenshotBoard active />);
+		await browseScreens();
 		await screen.findByRole("button", { name: "View AI name 1" });
 		fireEvent.change(screen.getByLabelText("Screen group"), { target: { value: "Setup" } });
-		fireEvent.click(screen.getByRole("button", { name: "Analyze screenshots" }));
+		openMore();
+		fireEvent.click(screen.getByRole("button", { name: "Analyze again" }));
 		await screen.findByRole("region", { name: "Onboarding" });
 		expect(screen.getByRole("button", { name: "View AI name 4" })).toBeVisible();
 		expect(screen.queryByText(/No screens match/)).not.toBeInTheDocument();
@@ -496,6 +525,7 @@ describe("collection intelligence", () => {
 			async (settings) => ({ ...settings, companyDomain: "https://example.com" }),
 		);
 		await loadExistingBatch();
+		openMore();
 		fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
 		fireEvent.change(screen.getByLabelText("Company domain (optional)"), {
 			target: { value: "example.com" },
@@ -511,6 +541,7 @@ describe("collection intelligence", () => {
 		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([intelligent]);
 		render(<ScreenshotBoard active />);
 		await screen.findByText("Test progressive setup");
+		await browseScreens();
 		fireEvent.change(screen.getByRole("searchbox", { name: "Search screenshots" }), {
 			target: { value: "dense form" },
 		});
@@ -558,6 +589,7 @@ describe("collection intelligence", () => {
 it("keeps the latest context when a pending save completes before a delayed tab reload", async () => {
 	vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([batch]);
 	const view = render(<ScreenshotBoard active />);
+	await browseScreens();
 	await screen.findByRole("button", { name: "View Capture 1.png" });
 	let finishSave: ((settings: typeof DEFAULT_INTEL_SETTINGS) => void) | undefined;
 	vi.mocked(nativeBridgeClient.productIntel.saveSettings).mockImplementationOnce(
@@ -566,6 +598,7 @@ it("keeps the latest context when a pending save completes before a delayed tab 
 				finishSave = resolve;
 			}),
 	);
+	openMore();
 	fireEvent.click(screen.getByRole("button", { name: "Our product Edit" }));
 	fireEvent.change(screen.getByLabelText("Our product"), {
 		target: { value: "Latest exact wording!!" },
@@ -706,6 +739,7 @@ describe("Product brief", () => {
 
 	it("shows screen purpose on gallery cards and explicitly in the evidence inspector", async () => {
 		await loadBrief();
+		await browseScreens();
 		const card = screen.getByRole("button", { name: "View AI name 1" });
 		expect(
 			within(card).getByText("Review requested permissions before choosing access."),
@@ -720,6 +754,7 @@ describe("Product brief", () => {
 
 	it("matches purpose to its screen and readout reasons only to their cited images", async () => {
 		await loadBrief();
+		await browseScreens();
 		const search = screen.getByRole("searchbox", { name: "Search screenshots" });
 		fireEvent.change(search, { target: { value: "saved project" } });
 		expect(screen.getByText("1 of 4")).toBeVisible();
@@ -824,5 +859,374 @@ describe("Product brief", () => {
 		expect(screen.getByRole("button", { name: "More decisions (1)" })).toBeVisible();
 		expect(screen.queryByRole("region", { name: "Works well" })).not.toBeInTheDocument();
 		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+	});
+});
+
+const bulk: ScreenshotBatch = {
+	...brief,
+	images: Array.from({ length: 120 }, (_, index) => ({
+		...batch.images[0],
+		id: `image_${String(index + 1).padStart(8, "0")}-0000-0000-0000-000000000000`,
+		originalName: `Bulk ${index + 1}.png`,
+		path: `/Users/test/private/Bulk ${index + 1}.png`,
+	})),
+	analysis: {
+		...brief.analysis!,
+		screens: Array.from({ length: 120 }, (_, index) => ({
+			...brief.analysis!.screens[0],
+			imageId: `image_${String(index + 1).padStart(8, "0")}-0000-0000-0000-000000000000`,
+			label: `Screen ${index + 1}`,
+			group: index < 60 ? "Setup" : "Workspace",
+			purpose: index === 119 ? "Unique final screen purpose" : "Review a product screen",
+		})),
+		readout: {
+			strengths: [
+				{
+					...brief.analysis!.readout!.strengths[0],
+					evidenceImageIds: [
+						"image_00000025-0000-0000-0000-000000000000",
+						"image_00000120-0000-0000-0000-000000000000",
+					],
+				},
+			],
+			frictions: [],
+		},
+	},
+};
+
+describe("quiet bulk screenshot workflow", () => {
+	it("shows only representative group thumbnails until Browse expands the source library", async () => {
+		await loadBrief(bulk);
+		expect(screen.getByText("Drop screenshots here")).toBeVisible();
+		expect(screen.getByText("Up to 120 PNG, JPEG or WebP images")).toBeVisible();
+		expect(
+			within(screen.getByRole("region", { name: "Screen groups" })).getAllByRole("img"),
+		).toHaveLength(2);
+		expect(screen.queryByRole("button", { name: /^View / })).not.toBeInTheDocument();
+		expect(screen.queryByRole("region", { name: "Screenshot library" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText("Screen group")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Analyze screenshots" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Analyze again" })).not.toBeVisible();
+		expect(screen.getByRole("button", { name: "Open organized folder" })).not.toBeVisible();
+		await browseScreens();
+		expect(
+			within(screen.getByRole("region", { name: "Screenshot library" })).getAllByRole("img"),
+		).toHaveLength(24);
+		fireEvent.click(screen.getByRole("button", { name: "Browse 120 screens" }));
+		expect(screen.queryByRole("region", { name: "Screenshot library" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		openMore();
+		expect(screen.getByRole("button", { name: "Analyze again" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Open organized folder" })).toBeVisible();
+	});
+	it("bounds a 120-screen library to 24 cards, reaches the last page and searches the full batch", async () => {
+		await loadBrief(bulk);
+		await browseScreens();
+		expect(screen.getByText("Page 1 of 5")).toBeVisible();
+		expect(screen.getByRole("button", { name: "Previous page" })).toBeDisabled();
+		for (let page = 0; page < 4; page++)
+			fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+		expect(screen.getByText("Page 5 of 5")).toBeVisible();
+		expect(
+			within(screen.getByRole("region", { name: "Screenshot library" })).getAllByRole("img"),
+		).toHaveLength(24);
+		expect(screen.getByRole("button", { name: "View Screen 120" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
+		fireEvent.change(screen.getByRole("searchbox", { name: "Search screenshots" }), {
+			target: { value: "Unique final" },
+		});
+		expect(screen.getByText("1 of 120")).toBeVisible();
+		expect(
+			within(screen.getByRole("region", { name: "Screenshot library" })).getAllByRole("img"),
+		).toHaveLength(1);
+		expect(screen.getByRole("button", { name: "View Screen 120" })).toBeVisible();
+		fireEvent.change(screen.getByRole("searchbox", { name: "Search screenshots" }), {
+			target: { value: "" },
+		});
+		expect(screen.getByText("Page 1 of 5")).toBeVisible();
+		fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+		fireEvent.change(screen.getByLabelText("Screen group"), { target: { value: "Workspace" } });
+		expect(screen.getByText("Page 1 of 3")).toBeVisible();
+		expect(screen.getByRole("button", { name: "View Screen 61" })).toBeVisible();
+	});
+	it("opens cited screens across page boundaries without mounting the library", async () => {
+		await loadBrief(bulk);
+		fireEvent.click(screen.getByRole("button", { name: "Evidence for Focused choices" }));
+		const dialog = screen.getByRole("dialog");
+		expect(within(dialog).getByRole("img", { name: "Screen 25" })).toBeVisible();
+		fireEvent.click(within(dialog).getByRole("button", { name: "Next screenshot" }));
+		expect(within(dialog).getByRole("img", { name: "Screen 120" })).toBeVisible();
+		fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+		expect(screen.queryByRole("region", { name: "Screenshot library" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Browse 120 screens" })).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
+	});
+	it("navigates filtered evidence beyond the current source page", async () => {
+		await loadBrief(bulk);
+		await browseScreens();
+		fireEvent.change(screen.getByLabelText("Screen group"), { target: { value: "Workspace" } });
+		fireEvent.click(screen.getByRole("button", { name: "View Screen 84" }));
+		const dialog = screen.getByRole("dialog");
+		fireEvent.keyDown(dialog, { key: "ArrowRight" });
+		expect(within(dialog).getByRole("img", { name: "Screen 85" })).toBeVisible();
+		expect(within(dialog).getByText("25 of 60")).toBeVisible();
+	});
+	it("preserves an open library and surviving group on same-batch reanalysis", async () => {
+		await loadBrief(bulk);
+		await browseScreens();
+		fireEvent.change(screen.getByLabelText("Screen group"), { target: { value: "Workspace" } });
+		fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+		vi.mocked(nativeBridgeClient.screenshotIntel.analyze).mockResolvedValue(bulk);
+		openMore();
+		fireEvent.click(screen.getByRole("button", { name: "Analyze again" }));
+		await waitFor(() => expect(nativeBridgeClient.screenshotIntel.analyze).toHaveBeenCalledOnce());
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Analyze again" })).toBeEnabled(),
+		);
+		expect(screen.getByRole("button", { name: "Browse 120 screens" })).toHaveAttribute(
+			"aria-expanded",
+			"true",
+		);
+		expect(screen.getByLabelText("Screen group")).toHaveValue("Workspace");
+		expect(screen.getByText("Page 2 of 3")).toBeVisible();
+	});
+	it("resets sources, filters and pagination when selecting history without importing or analyzing", async () => {
+		const other = { ...brief, id: "batch_00000000-0000-0000-0000-000000000002" };
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([bulk, other]);
+		vi.mocked(nativeBridgeClient.screenshotIntel.get).mockResolvedValue(other);
+		render(<ScreenshotBoard active />);
+		await browseScreens();
+		fireEvent.change(screen.getByLabelText("Screen group"), { target: { value: "Workspace" } });
+		fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+		fireEvent.change(screen.getByRole("searchbox", { name: "Search screenshots" }), {
+			target: { value: "Review" },
+		});
+		openMore();
+		fireEvent.change(screen.getByLabelText("Recent research"), { target: { value: other.id } });
+		await waitFor(() => expect(screen.getByLabelText("Recent research")).toHaveValue(other.id));
+		expect(screen.queryByRole("region", { name: "Screenshot library" })).not.toBeInTheDocument();
+		await browseScreens();
+		expect(screen.getByLabelText("Screen group")).toHaveValue("");
+		expect(screen.getByRole("searchbox", { name: "Search screenshots" })).toHaveValue("");
+		expect(
+			within(screen.getByRole("region", { name: "Screenshot library" })).getAllByRole("img"),
+		).toHaveLength(4);
+		expect(nativeBridgeClient.screenshotIntel.import).not.toHaveBeenCalled();
+		expect(nativeBridgeClient.screenshotIntel.pick).not.toHaveBeenCalled();
+		expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+	});
+	it("keeps a failed bulk import available for retry with sources collapsed and no repeated picker", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.pick).mockResolvedValue({
+			...bulk,
+			analysis: null,
+		});
+		vi.mocked(nativeBridgeClient.screenshotIntel.analyze).mockRejectedValueOnce(
+			new Error("Quota exceeded"),
+		);
+		render(<ScreenshotBoard active />);
+		const choose = screen.getByRole("button", { name: "Choose screenshots" });
+		await waitFor(() => expect(choose).toBeEnabled());
+		fireEvent.click(choose);
+		await screen.findByRole("alert");
+		expect(screen.queryByRole("region", { name: "Screenshot library" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Browse 120 screens" })).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
+		vi.mocked(nativeBridgeClient.screenshotIntel.analyze).mockResolvedValueOnce(bulk);
+		fireEvent.click(screen.getByRole("button", { name: "Analyze screenshots" }));
+		await screen.findByRole("heading", { name: "Product brief" });
+		expect(nativeBridgeClient.screenshotIntel.pick).toHaveBeenCalledOnce();
+		expect(nativeBridgeClient.screenshotIntel.analyze).toHaveBeenCalledTimes(2);
+		expect(screen.queryByRole("region", { name: "Screenshot library" })).not.toBeInTheDocument();
+	});
+	it("cancels a pending analysis without losing imported sources or history", async () => {
+		let rejectAnalysis: ((reason: Error) => void) | undefined;
+		vi.mocked(nativeBridgeClient.screenshotIntel.analyze).mockImplementationOnce(
+			() =>
+				new Promise((_resolve, reject) => {
+					rejectAnalysis = reject;
+				}),
+		);
+		vi.mocked(nativeBridgeClient.screenshotIntel.cancel).mockImplementationOnce(async () => {
+			rejectAnalysis?.(new Error("Analysis cancelled"));
+		});
+		render(<ScreenshotBoard active />);
+		const choose = screen.getByRole("button", { name: "Choose screenshots" });
+		await waitFor(() => expect(choose).toBeEnabled());
+		fireEvent.click(choose);
+		await waitFor(() => expect(nativeBridgeClient.screenshotIntel.analyze).toHaveBeenCalledOnce());
+		fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+		await screen.findByRole("alert");
+		expect(nativeBridgeClient.screenshotIntel.cancel).toHaveBeenCalledExactlyOnceWith(batch.id);
+		expect(screen.getByRole("button", { name: "Analyze screenshots" })).toBeEnabled();
+		expect(screen.queryByRole("region", { name: "Screenshot library" })).not.toBeInTheDocument();
+		openMore();
+		expect(screen.getByLabelText("Recent research")).toHaveValue(batch.id);
+		expect(nativeBridgeClient.screenshotIntel.pick).toHaveBeenCalledOnce();
+	});
+});
+
+it.each([
+	"automatic import",
+	"manual retry",
+])("cancels %s during settings preparation before any analysis job starts", async (mode) => {
+	let releaseSave: (() => void) | undefined;
+	vi.mocked(nativeBridgeClient.productIntel.saveSettings).mockImplementationOnce(
+		() =>
+			new Promise((resolve) => {
+				releaseSave = () => resolve(DEFAULT_INTEL_SETTINGS);
+			}),
+	);
+	if (mode === "manual retry")
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([batch]);
+	render(<ScreenshotBoard active />);
+	const choose = screen.getByRole("button", { name: "Choose screenshots" });
+	await waitFor(() => expect(choose).toBeEnabled());
+	if (mode === "automatic import") fireEvent.click(choose);
+	else fireEvent.click(await screen.findByRole("button", { name: "Analyze screenshots" }));
+	fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+	expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+	expect(nativeBridgeClient.screenshotIntel.cancel).not.toHaveBeenCalled();
+	await act(async () => releaseSave?.());
+	await screen.findByText("Analysis cancelled");
+	expect(nativeBridgeClient.screenshotIntel.analyze).not.toHaveBeenCalled();
+	expect(screen.getByRole("button", { name: "Browse 4 screens" })).toHaveAttribute(
+		"aria-expanded",
+		"false",
+	);
+	const retry = screen.getByRole("button", { name: "Analyze screenshots" });
+	expect(retry).toBeEnabled();
+	fireEvent.click(retry);
+	await screen.findByText("Setup uses focused choices.");
+	expect(nativeBridgeClient.screenshotIntel.analyze).toHaveBeenCalledExactlyOnceWith(batch.id);
+	expect(nativeBridgeClient.screenshotIntel.pick).toHaveBeenCalledTimes(
+		mode === "automatic import" ? 1 : 0,
+	);
+});
+
+describe("compact visual product groups", () => {
+	it("shows accurate group counts and opens the entire selected group on its first page", async () => {
+		await loadBrief(bulk);
+		const overview = screen.getByRole("region", { name: "Screen groups" });
+		expect(within(overview).getByText("2 groups")).toBeVisible();
+		expect(within(overview).getByRole("img", { name: "Screen 1" })).toBeVisible();
+		expect(within(overview).getByRole("img", { name: "Screen 61" })).toBeVisible();
+		expect(within(overview).queryByText("Review a product screen")).not.toBeInTheDocument();
+		fireEvent.click(
+			within(overview).getByRole("button", { name: "Browse Workspace · 60 screens" }),
+		);
+		expect(screen.getByLabelText("Screen group")).toHaveValue("Workspace");
+		expect(screen.getByText("60 of 120")).toBeVisible();
+		expect(screen.getByText("Page 1 of 3")).toBeVisible();
+		expect(screen.getByRole("button", { name: "View Screen 61" })).toBeVisible();
+		fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+		fireEvent.click(screen.getByRole("button", { name: "Browse Setup · 60 screens" }));
+		expect(screen.getByText("Page 1 of 3")).toBeVisible();
+		expect(screen.getByRole("button", { name: "View Screen 1" })).toBeVisible();
+		fireEvent.click(screen.getByRole("button", { name: "Browse 120 screens" }));
+		expect(screen.queryByRole("region", { name: "Screenshot library" })).not.toBeInTheDocument();
+		expect(within(overview).getAllByRole("img")).toHaveLength(2);
+		fireEvent.click(screen.getByRole("button", { name: "Browse 120 screens" }));
+		expect(screen.getByLabelText("Screen group")).toHaveValue("");
+		expect(screen.getByText("120 of 120")).toBeVisible();
+		expect(screen.getByText("Page 1 of 5")).toBeVisible();
+	});
+	it("caps the overview at four representative thumbnails while reporting every group", async () => {
+		await loadBrief({
+			...brief,
+			images: bulk.images.slice(0, 6),
+			analysis: {
+				...brief.analysis!,
+				screens: bulk
+					.analysis!.screens.slice(0, 6)
+					.map((item, index) => ({ ...item, group: `Flow ${index + 1}` })),
+			},
+		});
+		const overview = screen.getByRole("region", { name: "Screen groups" });
+		expect(within(overview).getByText("6 groups")).toBeVisible();
+		expect(within(overview).getAllByRole("img")).toHaveLength(4);
+		expect(
+			within(overview).queryByRole("button", { name: "Browse Flow 5 · 1 screen" }),
+		).not.toBeInTheDocument();
+		await browseScreens();
+		expect(screen.getByRole("region", { name: "Flow 6" })).toBeVisible();
+	});
+	it("leaves unanalyzed screenshots uncategorized until a real report is available", async () => {
+		vi.mocked(nativeBridgeClient.screenshotIntel.list).mockResolvedValue([batch]);
+		render(<ScreenshotBoard active />);
+		await screen.findByRole("button", { name: "Browse 4 screens" });
+		expect(screen.queryByRole("region", { name: "Screen groups" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("img")).not.toBeInTheDocument();
+	});
+	it("uses thumbnails for group and gallery previews but opens the full source in the inspector", async () => {
+		await loadBrief({
+			...brief,
+			images: brief.images.map((image) => ({
+				...image,
+				thumbnailPath: `/Users/test/thumbs/${image.id}.jpg`,
+			})),
+		});
+		const overview = screen.getByRole("region", { name: "Screen groups" });
+		expect(within(overview).getByRole("img", { name: "AI name 1" })).toHaveAttribute(
+			"src",
+			expect.stringContaining("/thumbs/"),
+		);
+		await browseScreens();
+		const card = screen.getByRole("button", { name: "View AI name 1" });
+		expect(within(card).getByRole("img")).toHaveAttribute(
+			"src",
+			expect.stringContaining("/thumbs/"),
+		);
+		expect(
+			within(card).getByText("Review requested permissions before choosing access."),
+		).toBeVisible();
+		fireEvent.click(card);
+		expect(
+			within(screen.getByRole("dialog")).getByRole("img", { name: "AI name 1" }),
+		).toHaveAttribute("src", expect.stringContaining("Capture%201.png"));
+	});
+	it("shows one finding per column and reveals all remaining findings together", async () => {
+		const strength = brief.analysis!.readout!.strengths[0];
+		const friction = brief.analysis!.readout!.frictions[0];
+		const extra = {
+			...brief,
+			analysis: {
+				...brief.analysis!,
+				readout: {
+					strengths: [strength, { ...strength, title: "Clear hierarchy" }],
+					frictions: [
+						friction,
+						{ ...friction, title: "Missing recovery" },
+						{ ...friction, title: "Hidden access" },
+					],
+				},
+			},
+		};
+		await loadBrief(extra);
+		expect(screen.getByText("Focused choices")).toBeVisible();
+		expect(screen.getByText("Unclear permission scope")).toBeVisible();
+		expect(screen.queryByText("Clear hierarchy")).not.toBeInTheDocument();
+		expect(screen.queryByText("Missing recovery")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "More findings (3)" }));
+		expect(screen.getByText("Clear hierarchy")).toBeVisible();
+		expect(screen.getByText("Hidden access")).toBeVisible();
+		expect(screen.getByRole("button", { name: "Fewer findings" })).toHaveAttribute(
+			"aria-expanded",
+			"true",
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Fewer findings" }));
+		expect(screen.queryByText("Clear hierarchy")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "More findings (3)" }));
+		vi.mocked(nativeBridgeClient.screenshotIntel.analyze).mockResolvedValue(extra);
+		openMore();
+		fireEvent.click(screen.getByRole("button", { name: "Analyze again" }));
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Analyze again" })).toBeEnabled(),
+		);
+		expect(screen.queryByText("Clear hierarchy")).not.toBeInTheDocument();
 	});
 });

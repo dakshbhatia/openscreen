@@ -41,7 +41,7 @@
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .card { min-width: 0; padding: 7px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--fg) 2%, transparent); }
 .card > button { display: block; width: 100%; padding: 0; background: transparent; color: var(--fg); border: 0; cursor: pointer; text-align: left; }
-.card img { width: 100%; aspect-ratio: 16 / 10; object-fit: contain; border-radius: 7px; background: color-mix(in srgb, var(--fg) 3%, transparent); }
+.card img { width: 100%; aspect-ratio: 16 / 10; object-fit: contain; border-radius: 12px; background: color-mix(in srgb, var(--fg) 3%, transparent); }
 .card > button > span { display: block; padding: 9px 5px 5px; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .evidenceDetails { padding: 3px 5px 5px; }
 .evidenceDetails > summary { color: var(--muted); font-size: 10px; cursor: pointer; }
@@ -118,3 +118,24 @@
 .inspectorPurpose { margin: 0; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 .inspectorPurpose > strong { display: block; color: var(--muted); font-size: 11px; font-weight: 500; margin-bottom: 5px; }
 @media (max-width: 760px) { .readout { grid-template-columns: minmax(0, 1fr); } }
+.dropCopy { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.dropCopy small { font-size: 10px; color: var(--muted); }
+.pendingAnalysis { margin: 14px 0; }
+.browseButton { display: inline-flex; align-items: center; gap: 5px; margin: 12px 0 0; padding: 6px 0; color: var(--muted); background: transparent; border: 0; font: inherit; font-size: 11px; cursor: pointer; }
+.browseButton[aria-expanded="true"] > svg { transform: rotate(90deg); }
+.library { margin-top: 8px; }
+.pagination { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 18px; }
+.pagination > span { color: var(--muted); font-size: 11px; }
+.menu > button.secondary { display: inline-flex; align-items: center; gap: 7px; padding: 8px 10px; width: 100%; }
+
+.groupOverview { margin: 18px 0; }
+.groupOverview > p { margin: 0 0 8px; color: var(--muted); font-size: 10px; }
+.groupOverview > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.groupOverview button { display: flex; align-items: center; gap: 9px; min-width: 0; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--fg) 2%, transparent); color: var(--fg); padding: 7px; text-align: left; cursor: pointer; }
+.groupOverview img { width: 64px; height: 46px; object-fit: contain; border-radius: 10px; background: color-mix(in srgb, var(--fg) 4%, transparent); flex-shrink: 0; }
+.groupOverview button > span { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.groupOverview strong { font-size: 11px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.groupOverview small { color: var(--muted); font-size: 10px; }
+.readout + .textButton { margin: -10px 0 14px; }
+@media (max-width: 1000px) { .groupOverview > div { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 440px) { .groupOverview > div { grid-template-columns: minmax(0, 1fr); } }
